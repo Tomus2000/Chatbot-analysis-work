@@ -22,6 +22,10 @@ from collections import Counter
 import warnings
 warnings.filterwarnings('ignore')
 
+# Email functionality (placeholder - will be configured later)
+EMAIL_API_AVAILABLE = False
+EMAIL_API_CONFIG = None
+
 # Try to import sklearn, make it optional
 try:
     from sklearn.cluster import KMeans
@@ -247,7 +251,7 @@ def get_openai_client():
 
 @st.cache_data
 def analyze_sentiment_openai(client, text, batch_size=10):
-    """Analyze sentiment using OpenAI API."""
+    """Analyze sentiment using OpenAI API with improved prompts."""
     if not text or pd.isna(text) or text.strip() == '':
         return {"label": "neutral", "score": 0.0}
     
@@ -257,21 +261,42 @@ def analyze_sentiment_openai(client, text, batch_size=10):
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a sentiment analysis expert. Analyze the sentiment of the following text and respond with ONLY a JSON object containing 'label' (one of: positive, neutral, negative) and 'score' (a float between -1.0 and 1.0, where -1.0 is very negative and 1.0 is very positive)."
+                    "content": """You are an expert sentiment analysis system for customer service conversations in the renewable energy sector (photovoltaic systems and heat pumps). 
+
+Your task is to analyze the sentiment of customer questions and interactions with precision. Consider:
+- Positive sentiment: enthusiasm, satisfaction, interest, appreciation, helpful responses
+- Neutral sentiment: factual questions, information requests, neutral inquiries
+- Negative sentiment: frustration, complaints, problems, dissatisfaction, concerns
+
+Respond with ONLY a JSON object containing:
+- 'label': one of "positive", "neutral", or "negative" (lowercase)
+- 'score': a float between -1.0 (very negative) and 1.0 (very positive), where 0.0 is neutral
+
+Be nuanced: a question about a problem doesn't necessarily mean negative sentiment if asked politely."""
                 },
                 {
                     "role": "user",
-                    "content": f"Text to analyze: {text[:2000]}"
+                    "content": f"Analyze the sentiment of this customer service interaction:\n\n{text[:2000]}"
                 }
             ],
             response_format={"type": "json_object"},
-            temperature=0.3
+            temperature=0.2
         )
         
         result = json.loads(response.choices[0].message.content)
+        label = result.get("label", "neutral").lower()
+        score = float(result.get("score", 0.0))
+        
+        # Ensure label is valid
+        if label not in ["positive", "neutral", "negative"]:
+            label = "neutral"
+        
+        # Clamp score to valid range
+        score = max(-1.0, min(1.0, score))
+        
         return {
-            "label": result.get("label", "neutral").lower(),
-            "score": float(result.get("score", 0.0))
+            "label": label,
+            "score": score
         }
     except Exception as e:
         st.warning(f"Error analyzing sentiment: {str(e)}")
@@ -279,7 +304,7 @@ def analyze_sentiment_openai(client, text, batch_size=10):
 
 @st.cache_data
 def analyze_happiness_openai(client, question, answer):
-    """Analyze user happiness/satisfaction using OpenAI API."""
+    """Analyze user happiness/satisfaction using OpenAI API with improved prompt."""
     combined_text = f"Question: {question}\nAnswer: {answer}"
     
     if not combined_text.strip() or (not question.strip() and not answer.strip()):
@@ -291,21 +316,43 @@ def analyze_happiness_openai(client, question, answer):
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a customer satisfaction analyst. Based on the user's question and the chatbot's answer, determine the user's happiness/satisfaction. Respond with ONLY a JSON object containing 'label' (one of: happy, neutral, unhappy) and 'score' (a float between 0.0 and 1.0, where 1.0 is very happy)."
+                    "content": """You are a customer satisfaction analyst specializing in technical support for photovoltaic systems and heat pumps.
+
+Analyze the user's question and the chatbot's answer to determine satisfaction. Consider:
+- Does the answer fully address the question?
+- Is the answer clear and helpful?
+- Does the user seem satisfied with the response?
+- Are there signs of confusion, frustration, or appreciation?
+
+Respond with ONLY a JSON object containing:
+- 'label': one of "happy", "neutral", or "unhappy"
+- 'score': a float between 0.0 (very unhappy) and 1.0 (very happy)
+
+Be accurate: "happy" means the user is satisfied and the answer was helpful. "unhappy" means frustration, confusion, or dissatisfaction."""
                 },
                 {
                     "role": "user",
-                    "content": f"{combined_text[:2000]}"
+                    "content": f"User Question: {question}\n\nChatbot Answer: {answer}\n\nAnalyze the user's happiness/satisfaction with this interaction."
                 }
             ],
             response_format={"type": "json_object"},
-            temperature=0.3
+            temperature=0.2
         )
         
         result = json.loads(response.choices[0].message.content)
+        label = result.get("label", "neutral").lower()
+        score = float(result.get("score", 0.5))
+        
+        # Ensure label is valid
+        if label not in ["happy", "neutral", "unhappy"]:
+            label = "neutral"
+        
+        # Clamp score to valid range
+        score = max(0.0, min(1.0, score))
+        
         return {
-            "label": result.get("label", "neutral").lower(),
-            "score": float(result.get("score", 0.5))
+            "label": label,
+            "score": score
         }
     except Exception as e:
         st.warning(f"Error analyzing happiness: {str(e)}")
@@ -778,7 +825,7 @@ def build_overview_tab(df):
             y=product_counts.values,
             labels={'x': 'Product Type', 'y': 'Count'}
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="overview_product_type")
     
     with col2:
         st.subheader("Questions by Channel")
@@ -788,7 +835,7 @@ def build_overview_tab(df):
             y=channel_counts.values,
             labels={'x': 'Channel', 'y': 'Count'}
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="overview_channel")
     
     # Sentiment and happiness overview
     col1, col2 = st.columns(2)
@@ -797,13 +844,13 @@ def build_overview_tab(df):
         if 'sentiment_label' in df.columns and df['sentiment_label'].notna().any():
             fig = plot_sentiment_distribution(df)
             if fig:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="overview_sentiment_dist")
     
     with col2:
         if 'user_happiness' in df.columns and df['user_happiness'].notna().any():
             fig = plot_happiness_distribution(df)
             if fig:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="overview_happiness_dist")
 
 def build_sentiment_tab(df):
     """Build the Sentiment & Happiness tab."""
@@ -820,13 +867,13 @@ def build_sentiment_tab(df):
         if 'sentiment_label' in df.columns and df['sentiment_label'].notna().any():
             fig = plot_sentiment_distribution(df)
             if fig:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_sentiment_dist")
     
     with col2:
         if 'user_happiness' in df.columns and df['user_happiness'].notna().any():
             fig = plot_happiness_distribution(df)
             if fig:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_happiness_dist")
     
     # Cross-tabulations
     col1, col2 = st.columns(2)
@@ -835,19 +882,19 @@ def build_sentiment_tab(df):
         if 'sentiment_label' in df.columns and df['sentiment_label'].notna().any():
             fig = plot_sentiment_by_product(df)
             if fig:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_sentiment_by_product")
     
     with col2:
         if 'user_happiness' in df.columns and df['user_happiness'].notna().any():
             fig = plot_happiness_by_product(df)
             if fig:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_happiness_by_product")
     
     # Sentiment vs CSAT
     if 'sentiment_score' in df.columns and 'csat_score' in df.columns:
         fig = plot_sentiment_vs_csat(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_sentiment_vs_csat")
     
     # Statistics table
     st.subheader("Sentiment Statistics")
@@ -855,7 +902,7 @@ def build_sentiment_tab(df):
         sentiment_stats = df.groupby('sentiment_label').agg({
             'sentiment_score': ['mean', 'std', 'count'] if 'sentiment_score' in df.columns else 'count'
         }).round(2)
-        st.dataframe(sentiment_stats, use_container_width=True)
+        st.dataframe(sentiment_stats, use_container_width=True, key="sentiment_tab_stats_table")
 
 def build_topics_tab(df):
     """Build the Topics & Segments tab."""
@@ -872,7 +919,7 @@ def build_topics_tab(df):
     # Topic distribution
     fig = plot_topic_distribution(df)
     if fig:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="topic_distribution")
     
     # Topic statistics
     st.subheader("Topic Statistics")
@@ -883,11 +930,11 @@ def build_topics_tab(df):
     }).round(2)
     topic_stats.columns = ['Avg Sentiment', 'Avg Happiness', 'Count']
     topic_stats = topic_stats.sort_values('Count', ascending=False)
-    st.dataframe(topic_stats, use_container_width=True)
+    st.dataframe(topic_stats, use_container_width=True, key="topic_stats_table")
     
     # Example questions per topic
     st.subheader("Example Questions by Topic")
-    selected_topic = st.selectbox("Select a topic to view examples:", df['topic_label'].unique())
+    selected_topic = st.selectbox("Select a topic to view examples:", df['topic_label'].unique(), key="topic_selector")
     
     topic_questions = df[df['topic_label'] == selected_topic]['user_question'].head(10)
     for i, q in enumerate(topic_questions, 1):
@@ -903,7 +950,7 @@ def build_topics_tab(df):
     if 'embedding' in df.columns:
         fig = plot_embeddings_2d(df, color_by=color_by)
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"embeddings_2d_{color_by}")
 
 def build_time_tab(df):
     """Build the Time Series tab."""
@@ -921,17 +968,17 @@ def build_time_tab(df):
     if 'sentiment_score' in df.columns and df['sentiment_score'].notna().any():
         fig = plot_sentiment_over_time(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="sentiment_over_time")
     
     # Volume over time
     fig = plot_volume_over_time(df)
     if fig:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="volume_over_time")
     
     # Volume by product over time
     fig = plot_volume_by_product_over_time(df)
     if fig:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="volume_by_product_time")
     
     # Heatmaps
     col1, col2 = st.columns(2)
@@ -939,13 +986,13 @@ def build_time_tab(df):
     with col1:
         fig = plot_heatmap_weekday_hour(df, metric='count')
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="heatmap_count")
     
     with col2:
         if 'sentiment_score' in df.columns and df['sentiment_score'].notna().any():
             fig = plot_heatmap_weekday_hour(df, metric='sentiment')
             if fig:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="heatmap_sentiment")
 
 def build_tables_tab(df):
     """Build the Tables / Raw Data tab."""
@@ -958,26 +1005,27 @@ def build_tables_tab(df):
     # Filter options for tables
     table_type = st.selectbox(
         "Select table view:",
-        ["All Data", "Worst Conversations", "Best Conversations", "Top Topics"]
+        ["All Data", "Worst Conversations", "Best Conversations", "Top Topics"],
+        key="table_type_selector"
     )
     
     if table_type == "All Data":
         st.subheader("All Conversations")
         # Remove embedding column for display (too large)
         display_df = df.drop(columns=['embedding'], errors='ignore')
-        st.dataframe(display_df, use_container_width=True, height=400)
+        st.dataframe(display_df, use_container_width=True, height=400, key="table_all_data")
     
     elif table_type == "Worst Conversations":
         st.subheader("Conversations with Lowest Sentiment/Happiness")
         worst_df = df.nsmallest(20, 'sentiment_score', keep='all') if 'sentiment_score' in df.columns else df.head(20)
         display_df = worst_df[['conversation_id', 'timestamp', 'product_type', 'user_question', 'sentiment_score', 'user_happiness']].drop(columns=['embedding'], errors='ignore')
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, use_container_width=True, key="table_worst")
     
     elif table_type == "Best Conversations":
         st.subheader("Conversations with Highest Sentiment/Happiness")
         best_df = df.nlargest(20, 'sentiment_score', keep='all') if 'sentiment_score' in df.columns else df.head(20)
         display_df = best_df[['conversation_id', 'timestamp', 'product_type', 'user_question', 'sentiment_score', 'user_happiness']].drop(columns=['embedding'], errors='ignore')
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, use_container_width=True, key="table_best")
     
     elif table_type == "Top Topics":
         if 'topic_label' in df.columns:
@@ -989,7 +1037,7 @@ def build_tables_tab(df):
             }).round(2)
             topic_summary.columns = ['Count', 'Avg Sentiment', 'Avg Happiness']
             topic_summary = topic_summary.sort_values('Count', ascending=False)
-            st.dataframe(topic_summary, use_container_width=True)
+            st.dataframe(topic_summary, use_container_width=True, key="table_topics")
         else:
             st.info("Topics not computed yet.")
     
@@ -997,17 +1045,18 @@ def build_tables_tab(df):
     st.divider()
     st.subheader("Export Data")
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         # Remove embedding column for export (too large for CSV)
         export_df = df.drop(columns=['embedding'], errors='ignore')
         csv = export_df.to_csv(index=False)
         st.download_button(
-            label="Download as CSV",
+            label="📥 Download as CSV",
             data=csv,
             file_name="chatbot_analysis.csv",
-            mime="text/csv"
+            mime="text/csv",
+            key="download_csv"
         )
     
     with col2:
@@ -1019,13 +1068,44 @@ def build_tables_tab(df):
                 export_df.to_excel(writer, index=False, sheet_name='Data')
             excel_data = output.getvalue()
             st.download_button(
-                label="Download as Excel",
+                label="📥 Download as Excel",
                 data=excel_data,
                 file_name="chatbot_analysis.xlsx",
-                mime="application/vnd.openpyxl-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openpyxl-officedocument.spreadsheetml.sheet",
+                key="download_excel"
             )
         except Exception as e:
             st.error(f"Error creating Excel file: {str(e)}")
+    
+    with col3:
+        # Email report button
+        st.markdown("**Email Report**")
+        recipient_email = st.text_input(
+            "Recipient Email",
+            key="email_recipient_input",
+            placeholder="email@example.com",
+            help="Enter email address to send the report to"
+        )
+        email_sent = st.button(
+            label="📧 Send Email Report",
+            key="email_report_button",
+            help="Send analysis findings via email (API configuration required)",
+            use_container_width=True,
+            disabled=not recipient_email or not EMAIL_API_AVAILABLE
+        )
+        if email_sent and recipient_email:
+            if EMAIL_API_AVAILABLE:
+                success, message = send_email_report(df, recipient_email, EMAIL_API_CONFIG)
+                if success:
+                    st.success(f"✅ {message}")
+                else:
+                    st.error(f"❌ {message}")
+            else:
+                st.warning("📧 Email API not configured yet. Please provide email API details to enable this feature.")
+                # Show preview of report
+                with st.expander("Preview Report"):
+                    report_text = generate_email_report(df)
+                    st.text(report_text)
 
 def build_diagnostics_tab(df):
     """Build the Diagnostics / Data Quality tab."""
@@ -1053,7 +1133,7 @@ def build_diagnostics_tab(df):
     }
     
     quality_df = pd.DataFrame(list(quality_metrics.items()), columns=['Metric', 'Value'])
-    st.dataframe(quality_df, use_container_width=True)
+    st.dataframe(quality_df, use_container_width=True, key="quality_metrics_table")
     
     # Missing data visualization
     st.subheader("Missing Data Pattern")
@@ -1067,7 +1147,7 @@ def build_diagnostics_tab(df):
             title="Missing Values by Column",
             labels={'x': 'Column', 'y': 'Missing Count'}
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="missing_data_chart")
     else:
         st.success("No missing data found!")
     
@@ -1079,7 +1159,7 @@ def build_diagnostics_tab(df):
         'Non-Null Count': df.notna().sum(),
         'Null Count': df.isna().sum()
     })
-    st.dataframe(col_info, use_container_width=True)
+    st.dataframe(col_info, use_container_width=True, key="column_info_table")
 
 # ============================================================================
 # MAIN APP
@@ -1087,12 +1167,29 @@ def build_diagnostics_tab(df):
 
 def main():
     """Main Streamlit app."""
-    # Very distinctive banner to confirm this is the right app
+    # Enpal branding header - VERY PROMINENT AND VISIBLE
     st.markdown("""
-    <div style='background-color: #1f77b4; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
-        <h1 style='color: white; text-align: center; margin: 0;'>💬 CHATBOT CONVERSATION ANALYZER</h1>
-        <p style='color: white; text-align: center; margin: 5px 0 0 0;'>Analyze internal chatbot conversations about photovoltaic systems and heat pumps</p>
+    <div style='background: linear-gradient(135deg, #00A651 0%, #00843D 100%); padding: 40px 30px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.25); border: 4px solid #00A651;'>
+        <div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 30px;'>
+            <div style='display: flex; align-items: center; gap: 30px;'>
+                <div style='background-color: white; padding: 25px 40px; border-radius: 15px; font-size: 64px; font-weight: 900; color: #00A651; letter-spacing: 5px; box-shadow: 0 8px 16px rgba(0,0,0,0.35); border: 5px solid #00843D; text-align: center; min-width: 280px;'>
+                    ⚡ ENPAL ⚡
+                </div>
+            </div>
+            <div style='flex: 1; text-align: center; min-width: 400px;'>
+                <h1 style='color: white; margin: 0; font-size: 40px; font-weight: 900; text-shadow: 4px 4px 8px rgba(0,0,0,0.5); letter-spacing: 2px;'>💬 Chatbot Conversation Analyzer</h1>
+                <p style='color: rgba(255,255,255,1); margin: 15px 0 0 0; font-size: 20px; font-weight: 700;'>Analyze internal chatbot conversations about photovoltaic systems and heat pumps</p>
+            </div>
+        </div>
     </div>
+    <style>
+        .stApp {
+            background-color: #f8f9fa;
+        }
+        .main .block-container {
+            padding-top: 2rem;
+        }
+    </style>
     """, unsafe_allow_html=True)
     
     # Initialize session state
@@ -1108,7 +1205,8 @@ def main():
             "Enter OpenAI API Key",
             type="password",
             value=st.session_state.get('openai_api_key', ''),
-            help="Enter your OpenAI API key. You can also set it in .streamlit/secrets.toml as OPENAI_API_KEY"
+            help="Enter your OpenAI API key. You can also set it in .streamlit/secrets.toml as OPENAI_API_KEY",
+            key="api_key_input"
         )
         if api_key_input:
             st.session_state.openai_api_key = api_key_input
@@ -1123,7 +1221,8 @@ def main():
         uploaded_file = st.file_uploader(
             "Upload Excel file",
             type=['xlsx', 'xls'],
-            help="Upload an Excel file containing chatbot conversation data"
+            help="Upload an Excel file containing chatbot conversation data",
+            key="file_uploader"
         )
         
         if uploaded_file is not None:
@@ -1140,25 +1239,29 @@ def main():
         use_openai = st.checkbox(
             "Use OpenAI to compute sentiment & happiness if missing",
             value=True,
-            help="Enable OpenAI API analysis for missing sentiment and happiness labels"
+            help="Enable OpenAI API analysis for missing sentiment and happiness labels",
+            key="use_openai_checkbox"
         )
         
         recompute_sentiment = st.checkbox(
             "Recompute sentiment even if columns exist",
             value=False,
-            help="Force recomputation of sentiment analysis"
+            help="Force recomputation of sentiment analysis",
+            key="recompute_sentiment_checkbox"
         )
         
         recompute_happiness = st.checkbox(
             "Recompute happiness even if columns exist",
             value=False,
-            help="Force recomputation of happiness analysis"
+            help="Force recomputation of happiness analysis",
+            key="recompute_happiness_checkbox"
         )
         
         compute_topics_flag = st.checkbox(
             "Compute topics (clustering)",
             value=False,
-            help="Perform topic analysis using embeddings and clustering"
+            help="Perform topic analysis using embeddings and clustering",
+            key="compute_topics_checkbox"
         )
         
         n_clusters = st.slider(
@@ -1166,7 +1269,8 @@ def main():
             min_value=3,
             max_value=15,
             value=5,
-            help="Number of topics to identify"
+            help="Number of topics to identify",
+            key="n_clusters_slider"
         )
         
         st.divider()
@@ -1183,7 +1287,8 @@ def main():
                     "Date Range",
                     value=(min_date, max_date),
                     min_value=min_date,
-                    max_value=max_date
+                    max_value=max_date,
+                    key="date_range_filter"
                 )
             else:
                 date_range = None
@@ -1197,7 +1302,8 @@ def main():
                 "Product Type",
                 options=product_types,
                 default=product_types,
-                help="Filter by product type"
+                help="Filter by product type",
+                key="product_type_filter"
             )
         else:
             selected_products = []
@@ -1209,7 +1315,8 @@ def main():
                 "Channel",
                 options=channels,
                 default=channels,
-                help="Filter by channel"
+                help="Filter by channel",
+                key="channel_filter"
             )
         else:
             selected_channels = []
@@ -1221,7 +1328,8 @@ def main():
                 "Sentiment",
                 options=sentiments,
                 default=sentiments,
-                help="Filter by sentiment"
+                help="Filter by sentiment",
+                key="sentiment_filter"
             )
         else:
             selected_sentiments = []
@@ -1233,7 +1341,8 @@ def main():
                 "Happiness",
                 options=happiness_options,
                 default=happiness_options,
-                help="Filter by happiness"
+                help="Filter by happiness",
+                key="happiness_filter"
             )
         else:
             selected_happiness = []
