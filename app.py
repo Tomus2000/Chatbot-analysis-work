@@ -1189,20 +1189,25 @@ def main():
             logo_base64 = base64.b64encode(logo_data).decode()
             file_ext = os.path.splitext(logo_path)[1].lower()
             mime_type = 'image/png' if file_ext == '.png' else ('image/svg+xml' if file_ext == '.svg' else 'image/jpeg')
-            logo_html = f'<img src="data:{mime_type};base64,{logo_base64}" style="max-height: 120px; width: auto; filter: brightness(0) invert(1);" alt="Enpal Logo">'
+            logo_html = f'<img src="data:{mime_type};base64,{logo_base64}" style="max-height: 80px; width: auto;" alt="Enpal Logo">'
     else:
-        # Use text-based logo as fallback (black text on white will be inverted by CSS)
-        logo_html = '<div style="font-size: 64px; font-weight: 900; color: #ffffff; letter-spacing: 5px; text-align: center;">ENPAL</div>'
+        # Enpal logo styled text - matches brand: bold sans-serif, white text with orange dot
+        logo_html = '''
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif; font-size: 48px; font-weight: 700; color: #ffffff; letter-spacing: 0px;">Enpal</span>
+            <span style="display: inline-block; width: 12px; height: 12px; background-color: #FF6B35; border-radius: 50%; margin-left: 2px;"></span>
+        </div>
+        '''
     
     st.markdown(f"""
-    <div style='background-color: #000000; padding: 40px 30px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.25); border: 4px solid #333333;'>
+    <div style='background-color: #000000; padding: 35px 30px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.25); border: 2px solid #1a1a1a;'>
         <div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 30px;'>
             <div style='display: flex; align-items: center; gap: 30px;'>
                 {logo_html}
             </div>
             <div style='flex: 1; text-align: center; min-width: 400px;'>
-                <h1 style='color: #ffffff; margin: 0; font-size: 40px; font-weight: 900; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); letter-spacing: 2px;'>💬 Chatbot Conversation Analyzer</h1>
-                <p style='color: #ffffff; margin: 15px 0 0 0; font-size: 20px; font-weight: 700; opacity: 0.95;'>Analyze internal chatbot conversations about photovoltaic systems and heat pumps</p>
+                <h1 style='font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif; color: #ffffff; margin: 0; font-size: 36px; font-weight: 700; letter-spacing: 0.5px;'>💬 Chatbot Conversation Analyzer</h1>
+                <p style='font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif; color: #ffffff; margin: 12px 0 0 0; font-size: 18px; font-weight: 400; opacity: 0.9;'>Analyze internal chatbot conversations about photovoltaic systems and heat pumps</p>
             </div>
         </div>
     </div>
@@ -1220,6 +1225,10 @@ def main():
         /* Ensure sidebar text has good contrast */
         .css-1d391kg {{
             color: #262730;
+        }}
+        /* Use Enpal brand font throughout */
+        * {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif !important;
         }}
     </style>
     """, unsafe_allow_html=True)
