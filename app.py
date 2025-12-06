@@ -1167,28 +1167,60 @@ def build_diagnostics_tab(df):
 
 def main():
     """Main Streamlit app."""
-    # Enpal branding header - VERY PROMINENT AND VISIBLE
-    st.markdown("""
-    <div style='background: linear-gradient(135deg, #00A651 0%, #00843D 100%); padding: 40px 30px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.25); border: 4px solid #00A651;'>
+    # Enpal branding header with black background and high contrast
+    # Try to load Enpal logo if available
+    import os
+    import base64
+    logo_html = ''
+    logo_path = None
+    for ext in ['.png', '.svg', '.jpg', '.webp']:
+        for filename in ['enpal_logo', 'enpal-logo', 'logo']:
+            path = filename + ext
+            if os.path.exists(path):
+                logo_path = path
+                break
+        if logo_path:
+            break
+    
+    if logo_path:
+        # Read and encode logo as base64
+        with open(logo_path, 'rb') as f:
+            logo_data = f.read()
+            logo_base64 = base64.b64encode(logo_data).decode()
+            file_ext = os.path.splitext(logo_path)[1].lower()
+            mime_type = 'image/png' if file_ext == '.png' else ('image/svg+xml' if file_ext == '.svg' else 'image/jpeg')
+            logo_html = f'<img src="data:{mime_type};base64,{logo_base64}" style="max-height: 120px; width: auto; filter: brightness(0) invert(1);" alt="Enpal Logo">'
+    else:
+        # Use text-based logo as fallback (black text on white will be inverted by CSS)
+        logo_html = '<div style="font-size: 64px; font-weight: 900; color: #ffffff; letter-spacing: 5px; text-align: center;">ENPAL</div>'
+    
+    st.markdown(f"""
+    <div style='background-color: #000000; padding: 40px 30px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.25); border: 4px solid #333333;'>
         <div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 30px;'>
             <div style='display: flex; align-items: center; gap: 30px;'>
-                <div style='background-color: white; padding: 25px 40px; border-radius: 15px; font-size: 64px; font-weight: 900; color: #00A651; letter-spacing: 5px; box-shadow: 0 8px 16px rgba(0,0,0,0.35); border: 5px solid #00843D; text-align: center; min-width: 280px;'>
-                    ⚡ ENPAL ⚡
-                </div>
+                {logo_html}
             </div>
             <div style='flex: 1; text-align: center; min-width: 400px;'>
-                <h1 style='color: white; margin: 0; font-size: 40px; font-weight: 900; text-shadow: 4px 4px 8px rgba(0,0,0,0.5); letter-spacing: 2px;'>💬 Chatbot Conversation Analyzer</h1>
-                <p style='color: rgba(255,255,255,1); margin: 15px 0 0 0; font-size: 20px; font-weight: 700;'>Analyze internal chatbot conversations about photovoltaic systems and heat pumps</p>
+                <h1 style='color: #ffffff; margin: 0; font-size: 40px; font-weight: 900; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); letter-spacing: 2px;'>💬 Chatbot Conversation Analyzer</h1>
+                <p style='color: #ffffff; margin: 15px 0 0 0; font-size: 20px; font-weight: 700; opacity: 0.95;'>Analyze internal chatbot conversations about photovoltaic systems and heat pumps</p>
             </div>
         </div>
     </div>
     <style>
-        .stApp {
+        .stApp {{
             background-color: #f8f9fa;
-        }
-        .main .block-container {
+        }}
+        .main .block-container {{
             padding-top: 2rem;
-        }
+        }}
+        /* Improve contrast for better readability */
+        .stMarkdown, .stText {{
+            color: #000000;
+        }}
+        /* Ensure sidebar text has good contrast */
+        .css-1d391kg {{
+            color: #262730;
+        }}
     </style>
     """, unsafe_allow_html=True)
     
