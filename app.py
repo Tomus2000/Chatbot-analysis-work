@@ -1192,14 +1192,9 @@ def main():
             logo_html = f'<img src="data:{mime_type};base64,{logo_base64}" style="max-height: 80px; width: auto;" alt="Enpal Logo">'
     else:
         # Enpal logo styled text - matches brand: bold sans-serif, white text with orange dot
-        logo_html = '''
-        <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif; font-size: 48px; font-weight: 700; color: #ffffff; letter-spacing: 0px;">Enpal</span>
-            <span style="display: inline-block; width: 12px; height: 12px; background-color: #FF6B35; border-radius: 50%; margin-left: 2px;"></span>
-        </div>
-        '''
+        logo_html = '<div style="display: flex; align-items: center; gap: 8px;"><span style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', \'Roboto\', \'Helvetica Neue\', Arial, sans-serif; font-size: 48px; font-weight: 700; color: #ffffff; letter-spacing: 0px;">Enpal</span><span style="display: inline-block; width: 12px; height: 12px; background-color: #FF6B35; border-radius: 50%; margin-left: 2px;"></span></div>'
     
-    st.markdown(f"""
+    header_html = f"""
     <div style='background-color: #000000; padding: 35px 30px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.25); border: 2px solid #1a1a1a;'>
         <div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 30px;'>
             <div style='display: flex; align-items: center; gap: 30px;'>
@@ -1211,27 +1206,32 @@ def main():
             </div>
         </div>
     </div>
+    """
+    
+    css_style = """
     <style>
-        .stApp {{
+        .stApp {
             background-color: #f8f9fa;
-        }}
-        .main .block-container {{
+        }
+        .main .block-container {
             padding-top: 2rem;
-        }}
+        }
         /* Improve contrast for better readability */
-        .stMarkdown, .stText {{
+        .stMarkdown, .stText {
             color: #000000;
-        }}
+        }
         /* Ensure sidebar text has good contrast */
-        .css-1d391kg {{
+        .css-1d391kg {
             color: #262730;
-        }}
+        }
         /* Use Enpal brand font throughout */
-        * {{
+        * {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif !important;
-        }}
+        }
     </style>
-    """, unsafe_allow_html=True)
+    """
+    
+    st.markdown(header_html + css_style, unsafe_allow_html=True)
     
     # Initialize session state
     if 'df' not in st.session_state:
