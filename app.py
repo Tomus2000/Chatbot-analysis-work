@@ -1210,23 +1210,188 @@ def main():
     
     css_style = """
     <style>
+        /* Main app background - premium black */
         .stApp {
-            background-color: #f8f9fa;
+            background-color: #0a0a0a !important;
+            color: #ffffff;
         }
+        
+        /* Main content area */
         .main .block-container {
             padding-top: 2rem;
+            background-color: #0a0a0a;
+            color: #ffffff;
         }
-        /* Improve contrast for better readability */
-        .stMarkdown, .stText {
-            color: #000000;
+        
+        /* All text elements - white for dark background */
+        .stMarkdown, .stText, h1, h2, h3, h4, h5, h6, p, span, div {
+            color: #ffffff !important;
         }
-        /* Ensure sidebar text has good contrast */
+        
+        /* Headers */
+        h1, h2, h3, h4, h5, h6 {
+            color: #ffffff !important;
+            font-weight: 600;
+        }
+        
+        /* Tabs - highly visible with dark theme */
+        .stTabs [data-baseweb="tab-list"] {
+            background-color: #1a1a1a;
+            border-radius: 8px 8px 0 0;
+            padding: 8px 8px 0 8px;
+            gap: 4px;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            background-color: #2a2a2a;
+            color: #ffffff !important;
+            border-radius: 8px 8px 0 0;
+            padding: 12px 24px;
+            font-weight: 500;
+            border: 1px solid #3a3a3a;
+            margin-right: 4px;
+        }
+        
+        .stTabs [data-baseweb="tab"]:hover {
+            background-color: #3a3a3a;
+            color: #ffffff !important;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            background-color: #0a0a0a !important;
+            color: #ffffff !important;
+            border-bottom: 3px solid #FF6B35;
+            font-weight: 600;
+        }
+        
+        /* Tab content area */
+        .stTabs [data-baseweb="tab-panel"] {
+            background-color: #0a0a0a;
+            padding: 20px;
+        }
+        
+        /* Sidebar - dark theme */
         .css-1d391kg {
-            color: #262730;
+            background-color: #1a1a1a !important;
+            color: #ffffff !important;
         }
+        
+        [data-testid="stSidebar"] {
+            background-color: #1a1a1a !important;
+        }
+        
+        [data-testid="stSidebar"] * {
+            color: #ffffff !important;
+        }
+        
+        /* Input fields */
+        .stTextInput > div > div > input, 
+        .stTextArea > div > div > textarea,
+        .stSelectbox > div > div > select {
+            background-color: #2a2a2a !important;
+            color: #ffffff !important;
+            border: 1px solid #3a3a3a;
+        }
+        
+        /* Buttons */
+        .stButton > button {
+            background-color: #FF6B35 !important;
+            color: #ffffff !important;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            padding: 0.5rem 1.5rem;
+        }
+        
+        .stButton > button:hover {
+            background-color: #ff7b4a !important;
+        }
+        
+        /* Metrics */
+        [data-testid="stMetricValue"] {
+            color: #ffffff !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            color: #cccccc !important;
+        }
+        
+        /* Dataframes */
+        .stDataFrame, .dataframe {
+            background-color: #1a1a1a !important;
+            color: #ffffff !important;
+        }
+        
+        /* Dividers */
+        hr {
+            border-color: #3a3a3a !important;
+        }
+        
+        /* Info/Warning/Success boxes */
+        .stInfo, .stSuccess, .stWarning, .stError {
+            background-color: #1a1a1a !important;
+            border-left: 4px solid #FF6B35;
+            color: #ffffff !important;
+        }
+        
+        /* Checkboxes */
+        .stCheckbox label {
+            color: #ffffff !important;
+        }
+        
+        /* Select boxes */
+        .stSelectbox label, .stMultiSelect label {
+            color: #ffffff !important;
+        }
+        
+        /* Slider */
+        .stSlider label {
+            color: #ffffff !important;
+        }
+        
+        /* File uploader */
+        .stFileUploader {
+            background-color: #1a1a1a !important;
+            border: 2px dashed #3a3a3a !important;
+        }
+        
+        .stFileUploader label {
+            color: #ffffff !important;
+        }
+        
+        /* Expander */
+        .streamlit-expanderHeader {
+            background-color: #2a2a2a !important;
+            color: #ffffff !important;
+        }
+        
+        /* Radio buttons */
+        .stRadio label {
+            color: #ffffff !important;
+        }
+        
         /* Use Enpal brand font throughout */
         * {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif !important;
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #3a3a3a;
+            border-radius: 5px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4a4a4a;
         }
     </style>
     """
