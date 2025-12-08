@@ -39,24 +39,20 @@ except ImportError:
 # CONFIGURATION
 # ============================================================================
 
-# Column name mappings (adjustable)
-COLUMN_CONFIG = {
-    'conversation_id': 'conversation_id',
-    'timestamp': 'timestamp',
-    'channel': 'channel',
-    'product_type': 'product_type',
-    'user_question': 'user_question',
-    'bot_answer': 'bot_answer',
-    'sentiment_label': 'sentiment_label',
-    'sentiment_score': 'sentiment_score',
-    'user_happiness': 'user_happiness',
-    'happiness_score': 'happiness_score',
-    'csat_score': 'csat_score',
+# German column names mapping (EXACT as in Excel)
+GERMAN_COLUMNS = {
+    'Frage': 'frage',
+    'Antwort gefunden': 'antwort_gefunden',
+    'Antwort': 'antwort',
+    'Feedback Typ': 'feedback_typ',
+    'Feedback': 'feedback',
+    'Gefragt am': 'gefragt_am',
+    'Team': 'team',
+    'Gefundene Quellen': 'quellen'
 }
 
 # Default values for missing data
-DEFAULT_PRODUCT_TYPE = 'other'
-DEFAULT_CHANNEL = 'unknown'
+DEFAULT_TEAM = 'Unbekannt'
 
 # ============================================================================
 # STREAMLIT PAGE CONFIG
@@ -75,150 +71,164 @@ st.set_page_config(
 
 @st.cache_data
 def load_data(uploaded_file):
-    """Load and parse Excel file into DataFrame."""
+    """Load and parse Excel or CSV file into DataFrame."""
     try:
-        df = pd.read_excel(uploaded_file, engine='openpyxl')
+        # Get file name to determine format
+        file_name = uploaded_file.name.lower()
+        
+        # Check if it's a CSV file
+        if file_name.endswith('.csv'):
+            # Try different encodings and separators for CSV (common issue with German characters)
+            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'iso-8859-1', 'cp1252']
+            separators = [',', ';', '\t']  # Comma, semicolon, tab
+            df = None
+            
+            for encoding in encodings:
+                for sep in separators:
+                    try:
+                        uploaded_file.seek(0)  # Reset file pointer
+                        df = pd.read_csv(uploaded_file, encoding=encoding, sep=sep, on_bad_lines='skip')
+                        # Check if we got reasonable data (more than 1 column)
+                        if df.shape[1] > 1:
+                            break
+                        else:
+                            df = None
+                    except (UnicodeDecodeError, pd.errors.ParserError, Exception):
+                        continue
+                if df is not None and df.shape[1] > 1:
+                    break
+            
+            if df is None:
+                # Last attempt: let pandas auto-detect
+                uploaded_file.seek(0)
+                try:
+                    df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='utf-8', on_bad_lines='skip')
+                except:
+                    df = pd.read_csv(uploaded_file, encoding='latin-1', on_bad_lines='skip')
+        else:
+            # Excel file (.xlsx, .xls)
+            df = pd.read_excel(uploaded_file, engine='openpyxl')
+        
         return df
     except Exception as e:
-        st.error(f"Error loading file: {str(e)}")
+        st.error(f"❌ Fehler beim Laden der Datei: {str(e)}")
         return None
 
-def standardize_column_names(df):
-    """Standardize column names to lowercase with underscores."""
-    df.columns = df.columns.str.lower().str.replace(' ', '_').str.strip()
+def normalize_german_columns(df):
+    """Map German column names to normalized internal names while preserving originals."""
+    if df is None or df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # Create mapping from German to normalized names
+    column_mapping = {}
+    for german_col, normalized_col in GERMAN_COLUMNS.items():
+        # Check if German column exists (case-insensitive)
+        for col in df.columns:
+            if col.strip() == german_col:
+                if col != normalized_col:
+                    column_mapping[col] = normalized_col
+                break
+    
+    # Apply mapping
+    if column_mapping:
+        df = df.rename(columns=column_mapping)
+    
+    # Also keep original German names as additional columns for reference
+    for german_col, normalized_col in GERMAN_COLUMNS.items():
+        if normalized_col in df.columns and german_col not in df.columns:
+            # Store original name reference
+            pass
+    
     return df
 
-def infer_product_type(question_text):
-    """Infer product type from question text."""
-    if pd.isna(question_text) or not question_text:
-        return DEFAULT_PRODUCT_TYPE
-    
-    question_lower = str(question_text).lower()
-    
-    # Keywords for photovoltaic
-    pv_keywords = ['pv', 'photovoltaic', 'solar panel', 'solar panels', 'solar system', 
-                   'solar energy', 'inverter', 'battery', 'solar', 'panel', 'panels',
-                   'kwh', 'kw system', 'energy production', 'solar output']
-    
-    # Keywords for heat pump
-    hp_keywords = ['heat pump', 'heatpump', 'heating', 'cooling', 'refrigerant', 
-                   'servicing', 'service', 'maintenance', 'heating system']
-    
-    pv_score = sum(1 for keyword in pv_keywords if keyword in question_lower)
-    hp_score = sum(1 for keyword in hp_keywords if keyword in question_lower)
-    
-    if pv_score > hp_score and pv_score > 0:
-        return 'photovoltaic'
-    elif hp_score > pv_score and hp_score > 0:
-        return 'heat pump'
-    else:
-        return DEFAULT_PRODUCT_TYPE
-
 def preprocess_data(df):
-    """Preprocess the loaded DataFrame."""
+    """Preprocess the loaded DataFrame with German column structure."""
     if df is None or df.empty:
         return None
     
     df = df.copy()
     
-    # Standardize column names
-    df = standardize_column_names(df)
+    # Normalize German column names
+    df = normalize_german_columns(df)
     
-    # Explicit mappings for common column name variations
-    explicit_mappings = {
-        'question': 'user_question',
-        'questions': 'user_question',
-        'user_question': 'user_question',
-        'answer': 'bot_answer',
-        'answers': 'bot_answer',
-        'bot_answer': 'bot_answer',
-        'response': 'bot_answer',
-    }
+    # Check for required column
+    if 'frage' not in df.columns:
+        # Try case-insensitive search
+        for col in df.columns:
+            if col.strip().lower() in ['frage', 'question']:
+                df = df.rename(columns={col: 'frage'})
+                break
     
-    # Apply explicit mappings first
-    for old_name, new_name in explicit_mappings.items():
-        if old_name in df.columns and new_name not in df.columns:
-            df = df.rename(columns={old_name: new_name})
+    if 'frage' not in df.columns:
+        st.error("❌ Erforderliche Spalte 'Frage' nicht gefunden. Bitte überprüfen Sie das Excel-Format.")
+        return None
     
-    # Map columns to expected names (for other columns)
-    column_mapping = {}
-    for expected, config_key in COLUMN_CONFIG.items():
-        # Skip if already mapped or exists
-        if expected in df.columns:
-            continue
-        # Try exact match first
-        if config_key in df.columns:
-            if expected != config_key:
-                column_mapping[config_key] = expected
-        else:
-            # Try fuzzy matching
-            for col in df.columns:
-                if expected.lower() in col.lower() or col.lower() in expected.lower():
-                    if col not in explicit_mappings.values():  # Don't remap already mapped columns
-                        column_mapping[col] = expected
-                    break
-    
-    if column_mapping:
-        df = df.rename(columns=column_mapping)
-    
-    # Parse timestamp
-    if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-        df = df.dropna(subset=['timestamp'])  # Drop rows with invalid timestamps
-        df['date'] = df['timestamp'].dt.date
-        df['hour_of_day'] = df['timestamp'].dt.hour
-        df['weekday'] = df['timestamp'].dt.day_name()
-        df['weekday_num'] = df['timestamp'].dt.dayofweek
+    # Convert "Antwort gefunden" to boolean
+    if 'antwort_gefunden' in df.columns:
+        df['antwort_gefunden_bool'] = df['antwort_gefunden'].apply(
+            lambda x: True if str(x).strip().lower() in ['ja', 'yes', 'true', '1'] 
+            else False if str(x).strip().lower() in ['nein', 'no', 'false', '0'] 
+            else None
+        )
     else:
-        st.warning("No timestamp column found. Time-based analysis will be limited.")
+        df['antwort_gefunden_bool'] = None
+    
+    # Parse "Gefragt am" to datetime
+    if 'gefragt_am' in df.columns:
+        df['gefragt_am'] = pd.to_datetime(df['gefragt_am'], errors='coerce')
+        # Create helper time columns
+        df['date'] = df['gefragt_am'].dt.date
+        df['hour_of_day'] = df['gefragt_am'].dt.hour
+        df['weekday'] = df['gefragt_am'].dt.day_name()
+        df['weekday_num'] = df['gefragt_am'].dt.dayofweek
+        df['week'] = df['gefragt_am'].dt.isocalendar().week
+        df['month'] = df['gefragt_am'].dt.to_period('M')
+    else:
+        st.warning("⚠️ Spalte 'Gefragt am' nicht gefunden. Zeitbasierte Analysen sind eingeschränkt.")
         df['date'] = None
         df['hour_of_day'] = None
         df['weekday'] = None
         df['weekday_num'] = None
-    
-    # Handle missing optional columns
-    if 'product_type' not in df.columns:
-        # Try to infer product type from question text
-        df['product_type'] = df['user_question'].apply(infer_product_type)
-    else:
-        df['product_type'] = df['product_type'].fillna(DEFAULT_PRODUCT_TYPE)
-    
-    if 'channel' not in df.columns:
-        df['channel'] = DEFAULT_CHANNEL
-    else:
-        df['channel'] = df['channel'].fillna(DEFAULT_CHANNEL)
-    
-    # Ensure text columns exist
-    if 'user_question' not in df.columns:
-        st.error("Required column 'user_question' not found in the file.")
-        return None
-    
-    if 'bot_answer' not in df.columns:
-        df['bot_answer'] = ''
+        df['week'] = None
+        df['month'] = None
     
     # Clean text columns
-    df['user_question'] = df['user_question'].astype(str).fillna('')
-    df['bot_answer'] = df['bot_answer'].astype(str).fillna('')
+    text_columns = ['frage', 'antwort', 'feedback', 'quellen']
+    for col in text_columns:
+        if col in df.columns:
+            df[col] = df[col].astype(str).fillna('').str.strip()
+        else:
+            df[col] = ''
     
-    # Handle sentiment columns
-    if 'sentiment_label' not in df.columns:
-        df['sentiment_label'] = None
-    if 'sentiment_score' not in df.columns:
-        df['sentiment_score'] = None
+    # Handle optional columns
+    if 'team' not in df.columns:
+        df['team'] = DEFAULT_TEAM
+    else:
+        df['team'] = df['team'].fillna(DEFAULT_TEAM).astype(str)
     
-    # Handle happiness columns
-    if 'user_happiness' not in df.columns:
-        df['user_happiness'] = None
-    if 'happiness_score' not in df.columns:
-        df['happiness_score'] = None
+    if 'feedback_typ' not in df.columns:
+        df['feedback_typ'] = None
+    else:
+        df['feedback_typ'] = df['feedback_typ'].fillna('').astype(str)
     
-    # Handle CSAT
-    if 'csat_score' not in df.columns:
-        df['csat_score'] = None
+    # Initialize analysis columns (will be filled by OpenAI)
+    analysis_columns = [
+        'frage_sentiment_label', 'frage_sentiment_score',
+        'antwort_sentiment_label', 'antwort_sentiment_score',
+        'feedback_sentiment_label', 'feedback_sentiment_score',
+        'user_happiness_label', 'user_happiness_score', 'is_unhappy',
+        'resolution_status', 'complexity_level', 'needs_escalation',
+        'topic_id', 'topic_label'
+    ]
     
-    # Ensure conversation_id exists
-    if 'conversation_id' not in df.columns:
-        df['conversation_id'] = range(len(df))
+    for col in analysis_columns:
+        if col not in df.columns:
+            df[col] = None
+    
+    # Create row ID
+    df['row_id'] = range(len(df))
     
     return df
 
@@ -359,6 +369,189 @@ Be accurate: "happy" means the user is satisfied and the answer was helpful. "un
         return {"label": "neutral", "score": 0.5}
 
 @st.cache_data
+def analyze_sentiment_field_openai(client, text, field_name="text"):
+    """Analyze sentiment for a specific field (Frage, Antwort, or Feedback)."""
+    if not text or pd.isna(text) or str(text).strip() == '':
+        return {"label": "neutral", "score": 0.0}
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""Du bist ein Experte für Sentiment-Analyse bei Kundenservice-Interaktionen im Bereich erneuerbare Energien (Photovoltaik und Wärmepumpen).
+
+Analysiere das Sentiment des folgenden {field_name}-Texts präzise. Berücksichtige:
+- Positives Sentiment: Begeisterung, Zufriedenheit, Interesse, Wertschätzung, hilfreiche Antworten
+- Neutrales Sentiment: Sachliche Fragen, Informationsanfragen, neutrale Anfragen
+- Negatives Sentiment: Frustration, Beschwerden, Probleme, Unzufriedenheit, Bedenken
+
+Antworte mit NUR einem JSON-Objekt:
+- 'label': einer von "positive", "neutral" oder "negative" (kleingeschrieben)
+- 'score': ein Float zwischen -1.0 (sehr negativ) und 1.0 (sehr positiv), wobei 0.0 neutral ist
+
+Sei nuanciert: Eine Frage über ein Problem bedeutet nicht unbedingt negatives Sentiment, wenn sie höflich gestellt ist."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Analysiere das Sentiment dieses {field_name}-Texts:\n\n{str(text)[:2000]}"
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        label = result.get("label", "neutral").lower()
+        score = float(result.get("score", 0.0))
+        
+        if label not in ["positive", "neutral", "negative"]:
+            label = "neutral"
+        
+        score = max(-1.0, min(1.0, score))
+        
+        return {"label": label, "score": score}
+    except Exception as e:
+        st.warning(f"Fehler bei Sentiment-Analyse: {str(e)}")
+        return {"label": "neutral", "score": 0.0}
+
+@st.cache_data
+def analyze_resolution_status_openai(client, frage, antwort, antwort_gefunden, feedback=""):
+    """Analyze resolution status, complexity, and escalation needs."""
+    combined = f"Frage: {frage}\nAntwort: {antwort}\nAntwort gefunden: {antwort_gefunden}"
+    if feedback:
+        combined += f"\nFeedback: {feedback}"
+    
+    if not combined.strip():
+        return {
+            "resolution_status": "unclear",
+            "complexity_level": "low",
+            "needs_escalation": False
+        }
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """Du bist ein Experte für die Analyse von Chatbot-Interaktionen im Kundenservice.
+
+Analysiere die Interaktion und bestimme:
+1. Resolution Status: War die Frage vollständig gelöst?
+   - "resolved": Frage wurde vollständig und zufriedenstellend beantwortet
+   - "partially_resolved": Teilweise beantwortet, aber nicht vollständig
+   - "unresolved": Keine hilfreiche Antwort gefunden
+   - "unclear": Nicht eindeutig bestimmbar
+
+2. Complexity Level: Wie komplex war die Frage?
+   - "low": Einfache, standardisierte Frage
+   - "medium": Mittlere Komplexität, benötigt etwas Kontext
+   - "high": Sehr komplex, benötigt spezialisiertes Wissen
+
+3. Needs Escalation: Braucht dieser Fall menschliche Nachverfolgung?
+   - true: Ja, sollte an einen Menschen weitergeleitet werden
+   - false: Nein, Chatbot hat ausreichend geholfen
+
+Antworte mit NUR einem JSON-Objekt:
+- 'resolution_status': einer der oben genannten Werte
+- 'complexity_level': einer der oben genannten Werte
+- 'needs_escalation': boolean"""
+                },
+                {
+                    "role": "user",
+                    "content": f"Analysiere diese Interaktion:\n\n{combined[:2000]}"
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return {
+            "resolution_status": result.get("resolution_status", "unclear").lower(),
+            "complexity_level": result.get("complexity_level", "low").lower(),
+            "needs_escalation": bool(result.get("needs_escalation", False))
+        }
+    except Exception as e:
+        st.warning(f"Fehler bei Resolution-Analyse: {str(e)}")
+        return {
+            "resolution_status": "unclear",
+            "complexity_level": "low",
+            "needs_escalation": False
+        }
+
+@st.cache_data
+def analyze_user_happiness_comprehensive_openai(client, frage, antwort, antwort_gefunden, feedback="", feedback_typ=""):
+    """Comprehensive user happiness analysis considering all factors."""
+    context = f"Frage: {frage}\nAntwort: {antwort}\nAntwort gefunden: {antwort_gefunden}"
+    if feedback:
+        context += f"\nFeedback: {feedback}"
+    if feedback_typ:
+        context += f"\nFeedback Typ: {feedback_typ}"
+    
+    if not context.strip():
+        return {"label": "neutral", "score": 0.5, "is_unhappy": False}
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """Du bist ein Experte für Kundenzufriedenheitsanalyse bei Chatbot-Interaktionen.
+
+Analysiere die Gesamtzufriedenheit des Benutzers basierend auf:
+- Ton der Frage (Frage)
+- Ob eine Antwort gefunden wurde (Antwort gefunden: Ja/Nein)
+- Qualität und Ton der Antwort (Antwort)
+- Explizites Feedback (Feedback und Feedback Typ)
+
+Bestimme:
+1. User Happiness Label:
+   - "happy": Benutzer ist zufrieden, Antwort war hilfreich
+   - "neutral": Neutral, keine starken Emotionen
+   - "unhappy": Frustration, Verwirrung oder Unzufriedenheit
+
+2. User Happiness Score: 0.0 (sehr unglücklich) bis 1.0 (sehr glücklich)
+
+3. Is Unhappy: true wenn user_happiness_label == "unhappy" oder negatives Feedback vorhanden
+
+Antworte mit NUR einem JSON-Objekt:
+- 'label': einer von "happy", "neutral", "unhappy"
+- 'score': Float zwischen 0.0 und 1.0
+- 'is_unhappy': boolean"""
+                },
+                {
+                    "role": "user",
+                    "content": f"Analysiere die Benutzerzufriedenheit:\n\n{context[:2000]}"
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        label = result.get("label", "neutral").lower()
+        score = float(result.get("score", 0.5))
+        is_unhappy = bool(result.get("is_unhappy", False))
+        
+        if label not in ["happy", "neutral", "unhappy"]:
+            label = "neutral"
+        
+        score = max(0.0, min(1.0, score))
+        
+        # Override is_unhappy if label is unhappy
+        if label == "unhappy":
+            is_unhappy = True
+        
+        return {"label": label, "score": score, "is_unhappy": is_unhappy}
+    except Exception as e:
+        st.warning(f"Fehler bei Happiness-Analyse: {str(e)}")
+        return {"label": "neutral", "score": 0.5, "is_unhappy": False}
+
+@st.cache_data
 def get_embeddings_openai(client, texts, batch_size=100):
     """Get embeddings for texts using OpenAI API."""
     if not texts or len(texts) == 0:
@@ -381,56 +574,94 @@ def get_embeddings_openai(client, texts, batch_size=100):
     
     return embeddings
 
-def enrich_data_with_openai(df, recompute_sentiment=False, recompute_happiness=False):
-    """Enrich DataFrame with OpenAI analysis."""
+def enrich_data_with_openai(df, recompute_all=False):
+    """Enrich DataFrame with comprehensive OpenAI analysis for German format."""
     client = get_openai_client()
     if client is None:
-        st.warning("⚠️ OpenAI API key not set. Please enter your API key in the sidebar to enable analysis.")
+        st.warning("⚠️ OpenAI API-Schlüssel nicht gesetzt. Bitte geben Sie Ihren API-Schlüssel in der Sidebar ein.")
         return df
     
     df = df.copy()
     total_rows = len(df)
     
-    # Sentiment analysis
-    needs_sentiment = df['sentiment_label'].isna() | recompute_sentiment
-    sentiment_count = needs_sentiment.sum()
-    
-    if sentiment_count > 0:
-        st.info(f"Analyzing sentiment for {sentiment_count} rows...")
+    # 1. Sentiment analysis for Frage, Antwort, and Feedback separately
+    if recompute_all or df['frage_sentiment_label'].isna().any():
+        st.info(f"📊 Analysiere Sentiment für Frage, Antwort und Feedback ({total_rows} Zeilen)...")
         progress_bar = st.progress(0)
         
-        sentiment_results = []
-        for idx, (i, row) in enumerate(df[needs_sentiment].iterrows()):
-            text = str(row.get('user_question', '')) + ' ' + str(row.get('bot_answer', ''))
-            result = analyze_sentiment_openai(client, text)
-            sentiment_results.append((i, result))
-            progress_bar.progress((idx + 1) / sentiment_count)
-        
-        for i, result in sentiment_results:
-            df.at[i, 'sentiment_label'] = result['label']
-            df.at[i, 'sentiment_score'] = result['score']
+        for idx, (i, row) in enumerate(df.iterrows()):
+            if recompute_all or pd.isna(df.at[i, 'frage_sentiment_label']):
+                # Frage sentiment
+                frage_text = str(row.get('frage', ''))
+                if frage_text:
+                    result = analyze_sentiment_field_openai(client, frage_text, "Frage")
+                    df.at[i, 'frage_sentiment_label'] = result['label']
+                    df.at[i, 'frage_sentiment_score'] = result['score']
+            
+            if recompute_all or pd.isna(df.at[i, 'antwort_sentiment_label']):
+                # Antwort sentiment
+                antwort_text = str(row.get('antwort', ''))
+                if antwort_text:
+                    result = analyze_sentiment_field_openai(client, antwort_text, "Antwort")
+                    df.at[i, 'antwort_sentiment_label'] = result['label']
+                    df.at[i, 'antwort_sentiment_score'] = result['score']
+            
+            if recompute_all or pd.isna(df.at[i, 'feedback_sentiment_label']):
+                # Feedback sentiment (only if feedback exists)
+                feedback_text = str(row.get('feedback', ''))
+                if feedback_text and feedback_text.strip():
+                    result = analyze_sentiment_field_openai(client, feedback_text, "Feedback")
+                    df.at[i, 'feedback_sentiment_label'] = result['label']
+                    df.at[i, 'feedback_sentiment_score'] = result['score']
+            
+            progress_bar.progress((idx + 1) / total_rows)
         
         progress_bar.empty()
     
-    # Happiness analysis
-    needs_happiness = df['user_happiness'].isna() | recompute_happiness
-    happiness_count = needs_happiness.sum()
-    
-    if happiness_count > 0:
-        st.info(f"Analyzing user happiness for {happiness_count} rows...")
+    # 2. User happiness analysis (comprehensive)
+    if recompute_all or df['user_happiness_label'].isna().any():
+        st.info(f"😊 Analysiere Benutzerzufriedenheit ({total_rows} Zeilen)...")
         progress_bar = st.progress(0)
         
-        happiness_results = []
-        for idx, (i, row) in enumerate(df[needs_happiness].iterrows()):
-            question = str(row.get('user_question', ''))
-            answer = str(row.get('bot_answer', ''))
-            result = analyze_happiness_openai(client, question, answer)
-            happiness_results.append((i, result))
-            progress_bar.progress((idx + 1) / happiness_count)
+        for idx, (i, row) in enumerate(df.iterrows()):
+            if recompute_all or pd.isna(df.at[i, 'user_happiness_label']):
+                frage = str(row.get('frage', ''))
+                antwort = str(row.get('antwort', ''))
+                antwort_gefunden = str(row.get('antwort_gefunden', ''))
+                feedback = str(row.get('feedback', ''))
+                feedback_typ = str(row.get('feedback_typ', ''))
+                
+                result = analyze_user_happiness_comprehensive_openai(
+                    client, frage, antwort, antwort_gefunden, feedback, feedback_typ
+                )
+                df.at[i, 'user_happiness_label'] = result['label']
+                df.at[i, 'user_happiness_score'] = result['score']
+                df.at[i, 'is_unhappy'] = result['is_unhappy']
+            
+            progress_bar.progress((idx + 1) / total_rows)
         
-        for i, result in happiness_results:
-            df.at[i, 'user_happiness'] = result['label']
-            df.at[i, 'happiness_score'] = result['score']
+        progress_bar.empty()
+    
+    # 3. Resolution status, complexity, and escalation
+    if recompute_all or df['resolution_status'].isna().any():
+        st.info(f"🔍 Analysiere Resolution Status und Komplexität ({total_rows} Zeilen)...")
+        progress_bar = st.progress(0)
+        
+        for idx, (i, row) in enumerate(df.iterrows()):
+            if recompute_all or pd.isna(df.at[i, 'resolution_status']):
+                frage = str(row.get('frage', ''))
+                antwort = str(row.get('antwort', ''))
+                antwort_gefunden = str(row.get('antwort_gefunden', ''))
+                feedback = str(row.get('feedback', ''))
+                
+                result = analyze_resolution_status_openai(
+                    client, frage, antwort, antwort_gefunden, feedback
+                )
+                df.at[i, 'resolution_status'] = result['resolution_status']
+                df.at[i, 'complexity_level'] = result['complexity_level']
+                df.at[i, 'needs_escalation'] = result['needs_escalation']
+            
+            progress_bar.progress((idx + 1) / total_rows)
         
         progress_bar.empty()
     
@@ -679,18 +910,22 @@ def compute_topics(df, n_clusters=5):
     
     df = df.copy()
     
-    # Get embeddings for user questions
-    questions = df['user_question'].astype(str).tolist()
-    st.info(f"Computing embeddings for {len(questions)} questions...")
+    if 'frage' not in df.columns:
+        st.error("❌ Spalte 'frage' nicht gefunden.")
+        return df
+    
+    # Get embeddings for questions (Frage)
+    questions = df['frage'].astype(str).tolist()
+    st.info(f"📊 Berechne Embeddings für {len(questions)} Fragen...")
     
     embeddings = get_embeddings_openai(client, questions)
     
     if not embeddings or len(embeddings) == 0:
-        st.error("Failed to compute embeddings.")
+        st.error("❌ Fehler beim Berechnen der Embeddings.")
         return df
     
     # Perform clustering
-    st.info(f"Clustering into {n_clusters} topics...")
+    st.info(f"🔍 Clustering in {n_clusters} Themen...")
     embeddings_array = np.array(embeddings)
     
     # Standardize embeddings
@@ -705,13 +940,13 @@ def compute_topics(df, n_clusters=5):
     
     df['topic_id'] = topic_ids
     
-    # Generate topic labels using OpenAI
-    st.info("Generating topic labels...")
+    # Generate topic labels using OpenAI (in German context)
+    st.info("🏷️ Generiere Themen-Labels...")
     topic_labels = {}
     
     for topic_id in range(n_clusters):
         # Get sample questions for this topic
-        topic_questions = df[df['topic_id'] == topic_id]['user_question'].head(10).tolist()
+        topic_questions = df[df['topic_id'] == topic_id]['frage'].head(10).tolist()
         sample_text = "\n".join([f"- {q[:200]}" for q in topic_questions[:5]])
         
         try:
@@ -720,11 +955,11 @@ def compute_topics(df, n_clusters=5):
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a topic labeling expert. Based on the sample questions provided, generate a short, descriptive label (2-4 words) for this topic. Focus on photovoltaic systems and heat pumps if relevant. Respond with ONLY the label text, no additional explanation."
+                        "content": "Du bist ein Experte für Themen-Labeling. Basierend auf den Beispiel-Fragen generiere eine kurze, beschreibende Bezeichnung (2-4 Wörter) für dieses Thema. Fokussiere auf Photovoltaik-Systeme und Wärmepumpen, falls relevant. Antworte mit NUR dem Label-Text, keine zusätzliche Erklärung."
                     },
                     {
                         "role": "user",
-                        "content": f"Sample questions:\n{sample_text}"
+                        "content": f"Beispiel-Fragen:\n{sample_text}"
                     }
                 ],
                 temperature=0.5
@@ -732,7 +967,7 @@ def compute_topics(df, n_clusters=5):
             label = response.choices[0].message.content.strip()
             topic_labels[topic_id] = label
         except Exception as e:
-            topic_labels[topic_id] = f"Topic {topic_id + 1}"
+            topic_labels[topic_id] = f"Thema {topic_id + 1}"
     
     df['topic_label'] = df['topic_id'].map(topic_labels)
     
@@ -746,36 +981,40 @@ def compute_topics(df, n_clusters=5):
 # ============================================================================
 
 def filter_data(df, filters):
-    """Apply filters to DataFrame."""
+    """Apply filters to DataFrame (German column format)."""
     if df is None or df.empty:
         return df
     
     df_filtered = df.copy()
     
-    # Date range filter
+    # Date range filter (Gefragt am)
     if filters.get('date_range') and len(filters['date_range']) == 2:
         start_date, end_date = filters['date_range']
-        if start_date and end_date:
+        if start_date and end_date and 'date' in df_filtered.columns:
             df_filtered = df_filtered[
                 (df_filtered['date'] >= start_date) & 
                 (df_filtered['date'] <= end_date)
             ]
     
-    # Product type filter
-    if filters.get('product_types') and len(filters['product_types']) > 0:
-        df_filtered = df_filtered[df_filtered['product_type'].isin(filters['product_types'])]
+    # Team filter
+    if filters.get('teams') and len(filters['teams']) > 0 and 'team' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['team'].isin(filters['teams'])]
     
-    # Channel filter
-    if filters.get('channels') and len(filters['channels']) > 0:
-        df_filtered = df_filtered[df_filtered['channel'].isin(filters['channels'])]
+    # Antwort gefunden filter
+    if filters.get('antwort_gefunden') and len(filters['antwort_gefunden']) > 0 and 'antwort_gefunden' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['antwort_gefunden'].isin(filters['antwort_gefunden'])]
     
-    # Sentiment filter
-    if filters.get('sentiments') and len(filters['sentiments']) > 0:
-        df_filtered = df_filtered[df_filtered['sentiment_label'].isin(filters['sentiments'])]
+    # Feedback Typ filter
+    if filters.get('feedback_typ') and len(filters['feedback_typ']) > 0 and 'feedback_typ' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['feedback_typ'].isin(filters['feedback_typ'])]
     
     # Happiness filter
-    if filters.get('happiness') and len(filters['happiness']) > 0:
-        df_filtered = df_filtered[df_filtered['user_happiness'].isin(filters['happiness'])]
+    if filters.get('happiness') and len(filters['happiness']) > 0 and 'user_happiness_label' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['user_happiness_label'].isin(filters['happiness'])]
+    
+    # Resolution status filter
+    if filters.get('resolution') and len(filters['resolution']) > 0 and 'resolution_status' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['resolution_status'].isin(filters['resolution'])]
     
     return df_filtered
 
@@ -2133,11 +2372,11 @@ def main():
         
         st.divider()
         
-        st.header("📁 Data Upload")
+        st.header("📁 Daten-Upload")
         uploaded_file = st.file_uploader(
-            "Upload Excel file",
-            type=['xlsx', 'xls'],
-            help="Upload an Excel file containing chatbot conversation data",
+            "Excel oder CSV-Datei hochladen",
+            type=['xlsx', 'xls', 'csv'],
+            help="Laden Sie eine Excel- oder CSV-Datei mit Chatbot-Konversationsdaten hoch (deutsche Spalten: Frage, Antwort gefunden, etc.)",
             key="file_uploader"
         )
         
@@ -2150,64 +2389,50 @@ def main():
         
         st.divider()
         
-        st.header("⚙️ Analysis Options")
+        st.header("⚙️ Analyse-Optionen")
         
         use_openai = st.checkbox(
-            "Use OpenAI to compute sentiment & happiness if missing",
+            "OpenAI-Analyse ausführen / aktualisieren",
             value=True,
-            help="Enable OpenAI API analysis for missing sentiment and happiness labels",
+            help="Aktiviert OpenAI API-Analyse für Sentiment, Zufriedenheit, Resolution Status etc.",
             key="use_openai_checkbox"
         )
         
-        recompute_sentiment = st.checkbox(
-            "Recompute sentiment even if columns exist",
+        recompute_all = st.checkbox(
+            "Alle Analysen neu berechnen (auch wenn Spalten vorhanden sind)",
             value=False,
-            help="Force recomputation of sentiment analysis",
-            key="recompute_sentiment_checkbox"
-        )
-        
-        recompute_happiness = st.checkbox(
-            "Recompute happiness even if columns exist",
-            value=False,
-            help="Force recomputation of happiness analysis",
-            key="recompute_happiness_checkbox"
+            help="Erzwingt Neuberechnung aller OpenAI-Analysen",
+            key="recompute_all_checkbox"
         )
         
         compute_topics_flag = st.checkbox(
-            "Compute topics (clustering)",
+            "Themen-Clustering durchführen",
             value=False,
-            help="Perform topic analysis using embeddings and clustering",
+            help="Führt Themenanalyse mit Embeddings und Clustering durch",
             key="compute_topics_checkbox"
         )
         
         n_clusters = st.slider(
-            "Number of topics (clusters)",
-            min_value=3,
-            max_value=15,
-            value=5,
-            help="Number of topics to identify",
+            "Anzahl der Themen (Cluster)",
+            min_value=5,
+            max_value=20,
+            value=12,
+            help="Anzahl der zu identifizierenden Themen",
             key="n_clusters_slider"
-        )
-        
-        analyze_intents_flag = st.checkbox(
-            "🤖 Advanced AI Analysis (Question Intent & Insights)",
-            value=False,
-            help="Enable sophisticated AI analysis: question categorization, intent detection, urgency assessment, and actionable insights",
-            key="analyze_intents_checkbox"
         )
         
         st.divider()
         
-        st.header("🔍 Filters")
+        st.header("🔍 Filter")
         
-        # Date range filter
-        if st.session_state.df is not None and 'date' in st.session_state.df.columns:
-            dates = st.session_state.df['date'].dropna().unique()
+        # Date range filter (Gefragt am)
+        if st.session_state.df_processed is not None and 'date' in st.session_state.df_processed.columns:
+            dates = [d for d in st.session_state.df_processed['date'].dropna().unique() if d is not None]
             if len(dates) > 0:
                 min_date = min(dates)
                 max_date = max(dates)
                 date_range = st.date_input(
-                    "Date Range",
+                    "Datumsbereich (Gefragt am)",
                     value=(min_date, max_date),
                     min_value=min_date,
                     max_value=max_date,
@@ -2218,112 +2443,121 @@ def main():
         else:
             date_range = None
         
-        # Product type filter
-        if st.session_state.df is not None and 'product_type' in st.session_state.df.columns:
-            product_types = st.session_state.df['product_type'].unique().tolist()
-            selected_products = st.multiselect(
-                "Product Type",
-                options=product_types,
-                default=product_types,
-                help="Filter by product type",
-                key="product_type_filter"
+        # Team filter
+        if st.session_state.df_processed is not None and 'team' in st.session_state.df_processed.columns:
+            teams = sorted(st.session_state.df_processed['team'].dropna().unique().tolist())
+            selected_teams = st.multiselect(
+                "Team",
+                options=teams,
+                default=teams,
+                help="Filter nach Team",
+                key="team_filter"
             )
         else:
-            selected_products = []
+            selected_teams = []
         
-        # Channel filter
-        if st.session_state.df is not None and 'channel' in st.session_state.df.columns:
-            channels = st.session_state.df['channel'].unique().tolist()
-            selected_channels = st.multiselect(
-                "Channel",
-                options=channels,
-                default=channels,
-                help="Filter by channel",
-                key="channel_filter"
+        # Antwort gefunden filter
+        if st.session_state.df_processed is not None and 'antwort_gefunden' in st.session_state.df_processed.columns:
+            antwort_options = st.session_state.df_processed['antwort_gefunden'].dropna().unique().tolist()
+            selected_antwort = st.multiselect(
+                "Antwort gefunden",
+                options=antwort_options,
+                default=antwort_options,
+                help="Filter nach 'Antwort gefunden' (Ja/Nein)",
+                key="antwort_gefunden_filter"
             )
         else:
-            selected_channels = []
+            selected_antwort = []
         
-        # Sentiment filter
-        if st.session_state.df is not None and 'sentiment_label' in st.session_state.df.columns:
-            sentiments = st.session_state.df['sentiment_label'].dropna().unique().tolist()
-            selected_sentiments = st.multiselect(
-                "Sentiment",
-                options=sentiments,
-                default=sentiments,
-                help="Filter by sentiment",
-                key="sentiment_filter"
-            )
+        # Feedback Typ filter
+        if st.session_state.df_processed is not None and 'feedback_typ' in st.session_state.df_processed.columns:
+            feedback_types = sorted([ft for ft in st.session_state.df_processed['feedback_typ'].dropna().unique().tolist() if ft])
+            if feedback_types:
+                selected_feedback_types = st.multiselect(
+                    "Feedback Typ",
+                    options=feedback_types,
+                    default=feedback_types,
+                    help="Filter nach Feedback Typ (z.B. Lob, Kritik, Verbesserungsvorschlag)",
+                    key="feedback_typ_filter"
+                )
+            else:
+                selected_feedback_types = []
         else:
-            selected_sentiments = []
+            selected_feedback_types = []
         
-        # Happiness filter
-        if st.session_state.df is not None and 'user_happiness' in st.session_state.df.columns:
-            happiness_options = st.session_state.df['user_happiness'].dropna().unique().tolist()
+        # User happiness filter
+        if st.session_state.df_processed is not None and 'user_happiness_label' in st.session_state.df_processed.columns:
+            happiness_options = st.session_state.df_processed['user_happiness_label'].dropna().unique().tolist()
             selected_happiness = st.multiselect(
-                "Happiness",
+                "Benutzerzufriedenheit",
                 options=happiness_options,
                 default=happiness_options,
-                help="Filter by happiness",
+                help="Filter nach Benutzerzufriedenheit",
                 key="happiness_filter"
             )
         else:
             selected_happiness = []
         
+        # Resolution status filter
+        if st.session_state.df_processed is not None and 'resolution_status' in st.session_state.df_processed.columns:
+            resolution_options = st.session_state.df_processed['resolution_status'].dropna().unique().tolist()
+            selected_resolution = st.multiselect(
+                "Resolution Status",
+                options=resolution_options,
+                default=resolution_options,
+                help="Filter nach Resolution Status",
+                key="resolution_filter"
+            )
+        else:
+            selected_resolution = []
+        
         st.divider()
         
-        st.markdown("### Instructions")
+        st.markdown("### Anweisungen")
         st.markdown("""
-        1. Upload an Excel file with chatbot conversation data
-        2. Configure analysis options in the sidebar
-        3. Apply filters as needed
-        4. Explore results in the tabs above
+        1. Laden Sie eine Excel (.xlsx) oder CSV-Datei mit Chatbot-Konversationsdaten hoch
+        2. Konfigurieren Sie die Analyse-Optionen in der Sidebar
+        3. Wenden Sie Filter nach Bedarf an
+        4. Erkunden Sie die Ergebnisse in den Tabs oben
         """)
     
     # Main content area
     if st.session_state.df is not None:
-        # Preprocess data
+        # Preprocess data (handles German columns)
         df_processed = preprocess_data(st.session_state.df)
         
         if df_processed is not None:
             # Apply OpenAI analysis if requested
             if use_openai:
-                df_processed = enrich_data_with_openai(
-                    df_processed,
-                    recompute_sentiment=recompute_sentiment,
-                    recompute_happiness=recompute_happiness
-                )
+                df_processed = enrich_data_with_openai(df_processed, recompute_all=recompute_all)
             
             # Compute topics if requested
-            if compute_topics_flag:
+            if compute_topics_flag and 'frage' in df_processed.columns:
                 df_processed = compute_topics(df_processed, n_clusters=n_clusters)
             
-            # Advanced AI analysis (intent, categorization, etc.)
-            if analyze_intents_flag:
-                df_processed = enrich_data_with_advanced_analysis(df_processed, analyze_intents=True)
+            # Store processed data in session state (before filtering)
+            st.session_state.df_processed = df_processed
             
             # Apply filters
             filters = {
                 'date_range': date_range if date_range and len(date_range) == 2 else None,
-                'product_types': selected_products,
-                'channels': selected_channels,
-                'sentiments': selected_sentiments,
-                'happiness': selected_happiness
+                'teams': selected_teams,
+                'antwort_gefunden': selected_antwort,
+                'feedback_typ': selected_feedback_types,
+                'happiness': selected_happiness,
+                'resolution': selected_resolution
             }
             
             df_filtered = filter_data(df_processed, filters)
             
-            # Store in session state
-            st.session_state.df_processed = df_filtered
-            
             # Create tabs
             tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-                "Overview",
-                "Sentiment & Happiness",
-                "Topics & Segments",
-                "Time Series",
-                "Tables / Raw Data",
-                "Diagnostics / Data Quality"
+                "📊 Übersicht",
+                "😊 Sentiment & Zufriedenheit",
+                "🏷️ Themen & Inhalte",
+                "📈 Zeitreihen",
+                "👥 Teams & Performance",
+                "📋 Rohdaten & Export"
             ])
             
             with tab1:
@@ -2339,33 +2573,31 @@ def main():
                 build_time_tab(df_filtered)
             
             with tab5:
-                build_tables_tab(df_filtered)
+                build_teams_tab(df_filtered)
             
             with tab6:
-                build_diagnostics_tab(df_filtered)
+                build_raw_tab(df_filtered)
         else:
-            st.error("Error preprocessing data. Please check your file format.")
+            st.error("❌ Fehler bei der Datenverarbeitung. Bitte überprüfen Sie das Datei-Format.")
     else:
-        st.info("👈 Please upload an Excel file to get started.")
+        st.info("👈 Bitte laden Sie eine Excel (.xlsx) oder CSV-Datei hoch, um zu beginnen.")
         
-        # Show example data structure
-        with st.expander("Expected Data Structure"):
+        # Show example data structure (German format)
+        with st.expander("📋 Erwartete Datei-Struktur (Excel oder CSV)"):
             st.markdown("""
-            Your Excel file should contain at least these columns:
+            Ihre Datei (Excel oder CSV) sollte mindestens diese Spalten enthalten (genau wie im Screenshot):
             
-            - **conversation_id**: Unique identifier for each conversation
-            - **timestamp**: Date and time of the conversation
-            - **user_question**: The question asked by the user
-            - **bot_answer**: The chatbot's response
+            **Erforderliche Spalten:**
+            - **Frage**: Die Frage des Verkäufers/Benutzers
+            - **Antwort gefunden**: "Ja" oder "Nein"
+            - **Antwort**: Die Antwort des Chatbots
+            - **Gefragt am**: Zeitstempel der Frage (Datum/Zeit)
+            - **Team**: Team/Organisationseinheit (z.B. "Enpal > Sales Global > Online Sales > Hamburg")
             
-            Optional columns:
-            - **channel**: Communication channel (e.g., "web", "mobile")
-            - **product_type**: Type of product (e.g., "photovoltaic", "heat pump")
-            - **sentiment_label**: Pre-existing sentiment label
-            - **sentiment_score**: Pre-existing sentiment score
-            - **user_happiness**: Pre-existing happiness label
-            - **happiness_score**: Pre-existing happiness score
-            - **csat_score**: Customer satisfaction score
+            **Optionale Spalten:**
+            - **Feedback Typ**: Typ des Feedbacks (z.B. "Lob", "Kritik", "Verbesserungsvorschlag")
+            - **Feedback**: Freitext-Feedback vom Benutzer
+            - **Gefundene Quellen**: Interne Dokumente, die der Bot verwendet hat
             """)
 
 if __name__ == "__main__":
