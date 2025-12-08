@@ -568,51 +568,95 @@ def analyze_segments(df):
     
     # Segment by product type
     if 'product_type' in df.columns:
-        product_analysis = df.groupby('product_type').agg({
-            'user_question': 'count',
-            'sentiment_score': 'mean',
-            'happiness_score': 'mean',
-            'intent': lambda x: x.value_counts().to_dict() if 'intent' in df.columns else {}
-        }).round(3)
-        product_analysis.columns = ['question_count', 'avg_sentiment', 'avg_happiness', 'intent_distribution']
+        agg_dict = {'user_question': 'count'}
+        
+        if 'sentiment_score' in df.columns:
+            agg_dict['sentiment_score'] = 'mean'
+        if 'happiness_score' in df.columns:
+            agg_dict['happiness_score'] = 'mean'
+        
+        product_analysis = df.groupby('product_type').agg(agg_dict).round(3)
+        
+        # Add intent distribution separately if intent column exists
+        if 'intent' in df.columns:
+            intent_dist = df.groupby('product_type')['intent'].apply(lambda x: x.value_counts().to_dict()).to_frame('intent_distribution')
+            product_analysis = product_analysis.join(intent_dist)
+        
+        # Rename columns
+        column_mapping = {'user_question': 'question_count'}
+        if 'sentiment_score' in product_analysis.columns:
+            column_mapping['sentiment_score'] = 'avg_sentiment'
+        if 'happiness_score' in product_analysis.columns:
+            column_mapping['happiness_score'] = 'avg_happiness'
+        product_analysis = product_analysis.rename(columns=column_mapping)
+        
         analysis['by_product'] = product_analysis.sort_values('question_count', ascending=False)
     
     # Segment by channel
     if 'channel' in df.columns:
-        channel_analysis = df.groupby('channel').agg({
-            'user_question': 'count',
-            'sentiment_score': 'mean',
-            'happiness_score': 'mean'
-        }).round(3)
-        channel_analysis.columns = ['question_count', 'avg_sentiment', 'avg_happiness']
+        agg_dict = {'user_question': 'count'}
+        
+        if 'sentiment_score' in df.columns:
+            agg_dict['sentiment_score'] = 'mean'
+        if 'happiness_score' in df.columns:
+            agg_dict['happiness_score'] = 'mean'
+        
+        channel_analysis = df.groupby('channel').agg(agg_dict).round(3)
+        
+        column_mapping = {'user_question': 'question_count'}
+        if 'sentiment_score' in channel_analysis.columns:
+            column_mapping['sentiment_score'] = 'avg_sentiment'
+        if 'happiness_score' in channel_analysis.columns:
+            column_mapping['happiness_score'] = 'avg_happiness'
+        channel_analysis = channel_analysis.rename(columns=column_mapping)
+        
         analysis['by_channel'] = channel_analysis.sort_values('question_count', ascending=False)
     
     # Segment by intent
     if 'intent' in df.columns:
-        intent_analysis = df.groupby('intent').agg({
-            'user_question': 'count',
-            'sentiment_score': 'mean',
-            'happiness_score': 'mean',
-            'product_type': lambda x: x.value_counts().to_dict()
-        }).round(3)
-        intent_analysis.columns = ['question_count', 'avg_sentiment', 'avg_happiness', 'product_distribution']
+        agg_dict = {'user_question': 'count'}
+        
+        if 'sentiment_score' in df.columns:
+            agg_dict['sentiment_score'] = 'mean'
+        if 'happiness_score' in df.columns:
+            agg_dict['happiness_score'] = 'mean'
+        
+        intent_analysis = df.groupby('intent').agg(agg_dict).round(3)
+        
+        # Add product distribution separately
+        if 'product_type' in df.columns:
+            product_dist = df.groupby('intent')['product_type'].apply(lambda x: x.value_counts().to_dict()).to_frame('product_distribution')
+            intent_analysis = intent_analysis.join(product_dist)
+        
+        column_mapping = {'user_question': 'question_count'}
+        if 'sentiment_score' in intent_analysis.columns:
+            column_mapping['sentiment_score'] = 'avg_sentiment'
+        if 'happiness_score' in intent_analysis.columns:
+            column_mapping['happiness_score'] = 'avg_happiness'
+        intent_analysis = intent_analysis.rename(columns=column_mapping)
+        
         analysis['by_intent'] = intent_analysis.sort_values('question_count', ascending=False)
     
     # Segment by urgency
     if 'urgency' in df.columns:
-        urgency_analysis = df.groupby('urgency').agg({
-            'user_question': 'count',
-            'needs_human': 'sum' if 'needs_human' in df.columns else lambda x: 0
-        })
+        agg_dict = {'user_question': 'count'}
+        
+        if 'needs_human' in df.columns:
+            agg_dict['needs_human'] = 'sum'
+        
+        urgency_analysis = df.groupby('urgency').agg(agg_dict)
         analysis['by_urgency'] = urgency_analysis.sort_values('question_count', ascending=False)
     
     # Time-based segments
-    if 'date' in df.columns:
-        df['month'] = pd.to_datetime(df['date']).dt.to_period('M')
-        monthly_analysis = df.groupby('month').agg({
-            'user_question': 'count',
-            'sentiment_score': 'mean'
-        }).round(3)
+    if 'date' in df.columns and df['date'].notna().any():
+        df_copy = df.copy()
+        df_copy['month'] = pd.to_datetime(df_copy['date']).dt.to_period('M')
+        
+        agg_dict = {'user_question': 'count'}
+        if 'sentiment_score' in df_copy.columns:
+            agg_dict['sentiment_score'] = 'mean'
+        
+        monthly_analysis = df_copy.groupby('month').agg(agg_dict).round(3)
         analysis['by_month'] = monthly_analysis
     
     return analysis
@@ -1056,8 +1100,15 @@ def build_overview_tab(df):
                 st.plotly_chart(fig, use_container_width=True, key="overview_product_segment")
             
             with col2:
+                # Only show columns that exist
+                display_cols = ['question_count']
+                if 'avg_sentiment' in segment_analysis['by_product'].columns:
+                    display_cols.append('avg_sentiment')
+                if 'avg_happiness' in segment_analysis['by_product'].columns:
+                    display_cols.append('avg_happiness')
+                
                 st.dataframe(
-                    segment_analysis['by_product'][['question_count', 'avg_sentiment', 'avg_happiness']],
+                    segment_analysis['by_product'][display_cols],
                     use_container_width=True,
                     key="overview_product_table"
                 )
@@ -1066,14 +1117,19 @@ def build_overview_tab(df):
         if 'by_intent' in segment_analysis and len(segment_analysis['by_intent']) > 0:
             st.markdown("**Questions by Intent**")
             intent_data = segment_analysis['by_intent'].reset_index()
+            
+            # Only use color if avg_sentiment column exists
+            color_param = {}
+            if 'avg_sentiment' in intent_data.columns:
+                color_param = {'color': 'avg_sentiment', 'color_continuous_scale': 'RdYlGn'}
+            
             fig = px.bar(
                 intent_data,
                 x='intent',
                 y='question_count',
                 labels={'question_count': 'Number of Questions', 'intent': 'Question Intent'},
-                color='avg_sentiment',
-                color_continuous_scale='RdYlGn',
-                title="Question Distribution by Intent"
+                title="Question Distribution by Intent",
+                **color_param
             )
             fig = apply_dark_theme(fig)
             st.plotly_chart(fig, use_container_width=True, key="overview_intent_dist")
@@ -1095,8 +1151,15 @@ def build_overview_tab(df):
             
             with col2:
                 st.markdown("**Channel Performance**")
+                # Only show columns that exist
+                display_cols = ['question_count']
+                if 'avg_sentiment' in segment_analysis['by_channel'].columns:
+                    display_cols.append('avg_sentiment')
+                if 'avg_happiness' in segment_analysis['by_channel'].columns:
+                    display_cols.append('avg_happiness')
+                
                 st.dataframe(
-                    segment_analysis['by_channel'][['question_count', 'avg_sentiment', 'avg_happiness']],
+                    segment_analysis['by_channel'][display_cols],
                     use_container_width=True,
                     key="overview_channel_table"
                 )
@@ -1522,22 +1585,28 @@ def build_ai_insights_tab(df):
                 yaxis='y'
             ))
             
-            fig.add_trace(go.Scatter(
-                x=product_data['product_type'],
-                y=product_data['avg_sentiment'] * 100,  # Scale for visibility
-                name='Avg Sentiment (scaled)',
-                mode='lines+markers',
-                yaxis='y2',
-                line=dict(color='#4CAF50', width=3)
-            ))
+            # Only add sentiment trace if column exists
+            if 'avg_sentiment' in product_data.columns:
+                fig.add_trace(go.Scatter(
+                    x=product_data['product_type'],
+                    y=product_data['avg_sentiment'] * 100,  # Scale for visibility
+                    name='Avg Sentiment (scaled)',
+                    mode='lines+markers',
+                    yaxis='y2',
+                    line=dict(color='#4CAF50', width=3)
+                ))
             
-            fig.update_layout(
-                title="Product Type: Questions vs Sentiment",
-                xaxis_title="Product Type",
-                yaxis=dict(title="Question Count", side='left'),
-                yaxis2=dict(title="Sentiment Score (scaled)", side='right', overlaying='y'),
-                hovermode='x unified'
-            )
+            layout_dict = {
+                'title': "Product Type: Questions" + (" vs Sentiment" if 'avg_sentiment' in product_data.columns else ""),
+                'xaxis_title': "Product Type",
+                'yaxis': dict(title="Question Count", side='left'),
+                'hovermode': 'x unified'
+            }
+            
+            if 'avg_sentiment' in product_data.columns:
+                layout_dict['yaxis2'] = dict(title="Sentiment Score (scaled)", side='right', overlaying='y')
+            
+            fig.update_layout(**layout_dict)
             fig = apply_dark_theme(fig)
             st.plotly_chart(fig, use_container_width=True, key="insights_product_performance")
         
@@ -1547,14 +1616,17 @@ def build_ai_insights_tab(df):
             intent_data = segment_analysis['by_intent'].reset_index()
             
             # Treemap or sunburst would be nice but bar works
+            color_param = {}
+            if 'avg_sentiment' in intent_data.columns:
+                color_param = {'color': 'avg_sentiment', 'color_continuous_scale': 'RdYlGn'}
+            
             fig = px.bar(
                 intent_data,
                 x='intent',
                 y='question_count',
-                color='avg_sentiment',
-                color_continuous_scale='RdYlGn',
                 labels={'question_count': 'Number of Questions', 'intent': 'Intent Type'},
-                title="Questions by Intent with Sentiment Heatmap"
+                title="Questions by Intent" + (" with Sentiment Heatmap" if 'avg_sentiment' in intent_data.columns else ""),
+                **color_param
             )
             fig = apply_dark_theme(fig)
             st.plotly_chart(fig, use_container_width=True, key="insights_intent_analysis")
