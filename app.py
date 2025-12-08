@@ -437,6 +437,187 @@ def enrich_data_with_openai(df, recompute_sentiment=False, recompute_happiness=F
     return df
 
 # ============================================================================
+# ADVANCED AI ANALYSIS FUNCTIONS
+# ============================================================================
+
+@st.cache_data
+def analyze_question_intent_openai(client, question):
+    """Analyze question intent and category using AI."""
+    if not question or pd.isna(question) or str(question).strip() == '':
+        return {"intent": "unknown", "category": "general", "urgency": "low"}
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are an expert at analyzing customer service questions for renewable energy products (photovoltaic systems and heat pumps).
+
+Categorize the question intent and provide structured analysis. Respond with ONLY a JSON object containing:
+- 'intent': one of "information_request", "problem_solving", "purchase_inquiry", "technical_support", "maintenance", "billing", "installation", "other"
+- 'category': one of "technical", "sales", "service", "billing", "general"
+- 'urgency': one of "low", "medium", "high", "critical"
+- 'question_type': one of "how_to", "why", "what_is", "problem_report", "comparison", "pricing", "other"
+- 'needs_human': boolean indicating if this likely needs human intervention
+
+Be accurate and thoughtful in your categorization."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Analyze this customer question: {str(question)[:1000]}"
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return {
+            "intent": result.get("intent", "unknown"),
+            "category": result.get("category", "general"),
+            "urgency": result.get("urgency", "low"),
+            "question_type": result.get("question_type", "other"),
+            "needs_human": result.get("needs_human", False)
+        }
+    except Exception as e:
+        return {"intent": "unknown", "category": "general", "urgency": "low", "question_type": "other", "needs_human": False}
+
+@st.cache_data
+def generate_insights_openai(client, df_summary):
+    """Generate actionable insights from data summary using AI."""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a data analyst specializing in customer service insights for renewable energy companies.
+
+Based on the provided data summary, generate actionable insights. Focus on:
+1. Key patterns and trends
+2. Areas needing attention (high question volume, low satisfaction)
+3. Segment comparisons (which segments have most issues)
+4. Recommendations for improvement
+
+Respond with a JSON object containing:
+- 'key_insights': array of 3-5 key insights
+- 'recommendations': array of 3-5 actionable recommendations
+- 'concerns': array of concerns or issues to address
+- 'opportunities': array of opportunities for improvement
+- 'summary': a brief overall summary (2-3 sentences)
+
+Be specific, data-driven, and actionable."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Analyze this data and provide insights:\n\n{df_summary[:3000]}"
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.5
+        )
+        
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        return {
+            "key_insights": [],
+            "recommendations": [],
+            "concerns": [],
+            "opportunities": [],
+            "summary": "Unable to generate insights at this time."
+        }
+
+def enrich_data_with_advanced_analysis(df, analyze_intents=False):
+    """Enrich DataFrame with advanced AI analysis."""
+    client = get_openai_client()
+    if client is None:
+        return df
+    
+    df = df.copy()
+    
+    if analyze_intents:
+        questions_to_analyze = df[df['intent'].isna()] if 'intent' in df.columns else df
+        
+        if len(questions_to_analyze) > 0:
+            st.info(f"Analyzing question intents for {len(questions_to_analyze)} questions...")
+            progress_bar = st.progress(0)
+            
+            for idx, (i, row) in enumerate(questions_to_analyze.iterrows()):
+                question = str(row.get('user_question', ''))
+                intent_result = analyze_question_intent_openai(client, question)
+                
+                df.at[i, 'intent'] = intent_result['intent']
+                df.at[i, 'question_category'] = intent_result['category']
+                df.at[i, 'urgency'] = intent_result['urgency']
+                df.at[i, 'question_type'] = intent_result['question_type']
+                df.at[i, 'needs_human'] = intent_result['needs_human']
+                
+                progress_bar.progress((idx + 1) / len(questions_to_analyze))
+            
+            progress_bar.empty()
+    
+    return df
+
+def analyze_segments(df):
+    """Perform comprehensive segment analysis."""
+    if df is None or df.empty:
+        return {}
+    
+    analysis = {}
+    
+    # Segment by product type
+    if 'product_type' in df.columns:
+        product_analysis = df.groupby('product_type').agg({
+            'user_question': 'count',
+            'sentiment_score': 'mean',
+            'happiness_score': 'mean',
+            'intent': lambda x: x.value_counts().to_dict() if 'intent' in df.columns else {}
+        }).round(3)
+        product_analysis.columns = ['question_count', 'avg_sentiment', 'avg_happiness', 'intent_distribution']
+        analysis['by_product'] = product_analysis.sort_values('question_count', ascending=False)
+    
+    # Segment by channel
+    if 'channel' in df.columns:
+        channel_analysis = df.groupby('channel').agg({
+            'user_question': 'count',
+            'sentiment_score': 'mean',
+            'happiness_score': 'mean'
+        }).round(3)
+        channel_analysis.columns = ['question_count', 'avg_sentiment', 'avg_happiness']
+        analysis['by_channel'] = channel_analysis.sort_values('question_count', ascending=False)
+    
+    # Segment by intent
+    if 'intent' in df.columns:
+        intent_analysis = df.groupby('intent').agg({
+            'user_question': 'count',
+            'sentiment_score': 'mean',
+            'happiness_score': 'mean',
+            'product_type': lambda x: x.value_counts().to_dict()
+        }).round(3)
+        intent_analysis.columns = ['question_count', 'avg_sentiment', 'avg_happiness', 'product_distribution']
+        analysis['by_intent'] = intent_analysis.sort_values('question_count', ascending=False)
+    
+    # Segment by urgency
+    if 'urgency' in df.columns:
+        urgency_analysis = df.groupby('urgency').agg({
+            'user_question': 'count',
+            'needs_human': 'sum' if 'needs_human' in df.columns else lambda x: 0
+        })
+        analysis['by_urgency'] = urgency_analysis.sort_values('question_count', ascending=False)
+    
+    # Time-based segments
+    if 'date' in df.columns:
+        df['month'] = pd.to_datetime(df['date']).dt.to_period('M')
+        monthly_analysis = df.groupby('month').agg({
+            'user_question': 'count',
+            'sentiment_score': 'mean'
+        }).round(3)
+        analysis['by_month'] = monthly_analysis
+    
+    return analysis
+
+# ============================================================================
 # TOPIC ANALYSIS
 # ============================================================================
 
@@ -558,6 +739,31 @@ def filter_data(df, filters):
 # VISUALIZATION FUNCTIONS
 # ============================================================================
 
+def apply_dark_theme(fig):
+    """Apply dark theme to plotly figure."""
+    dark_layout = {
+        'plot_bgcolor': '#0a0a0a',
+        'paper_bgcolor': '#0a0a0a',
+        'font': {'color': '#ffffff', 'family': '-apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif'},
+        'xaxis': {
+            'gridcolor': '#2a2a2a',
+            'linecolor': '#3a3a3a',
+            'zerolinecolor': '#2a2a2a'
+        },
+        'yaxis': {
+            'gridcolor': '#2a2a2a',
+            'linecolor': '#3a3a3a',
+            'zerolinecolor': '#2a2a2a'
+        },
+        'legend': {
+            'bgcolor': '#1a1a1a',
+            'bordercolor': '#3a3a3a',
+            'font': {'color': '#ffffff'}
+        }
+    }
+    fig.update_layout(**dark_layout)
+    return fig
+
 def plot_sentiment_distribution(df):
     """Plot sentiment distribution."""
     if df is None or df.empty or 'sentiment_label' not in df.columns:
@@ -571,10 +777,10 @@ def plot_sentiment_distribution(df):
         title="Sentiment Distribution",
         labels={'x': 'Sentiment', 'y': 'Count'},
         color=sentiment_counts.index,
-        color_discrete_map={'positive': 'green', 'neutral': 'gray', 'negative': 'red'}
+        color_discrete_map={'positive': '#4CAF50', 'neutral': '#9E9E9E', 'negative': '#F44336'}
     )
     fig.update_layout(showlegend=False)
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_happiness_distribution(df):
     """Plot happiness distribution."""
@@ -589,10 +795,10 @@ def plot_happiness_distribution(df):
         title="User Happiness Distribution",
         labels={'x': 'Happiness', 'y': 'Count'},
         color=happiness_counts.index,
-        color_discrete_map={'happy': 'green', 'neutral': 'gray', 'unhappy': 'red'}
+        color_discrete_map={'happy': '#4CAF50', 'neutral': '#9E9E9E', 'unhappy': '#F44336'}
     )
     fig.update_layout(showlegend=False)
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_sentiment_by_product(df):
     """Plot sentiment by product type."""
@@ -607,7 +813,7 @@ def plot_sentiment_by_product(df):
         labels={'value': 'Count', 'index': 'Product Type'},
         barmode='stack'
     )
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_happiness_by_product(df):
     """Plot happiness by product type."""
@@ -622,7 +828,7 @@ def plot_happiness_by_product(df):
         labels={'value': 'Count', 'index': 'Product Type'},
         barmode='stack'
     )
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_sentiment_over_time(df):
     """Plot sentiment score over time."""
@@ -636,9 +842,10 @@ def plot_sentiment_over_time(df):
         x='date',
         y='sentiment_score',
         title="Average Sentiment Score Over Time",
-        labels={'sentiment_score': 'Average Sentiment Score', 'date': 'Date'}
+        labels={'sentiment_score': 'Average Sentiment Score', 'date': 'Date'},
+        color_discrete_sequence=['#FF6B35']
     )
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_volume_over_time(df):
     """Plot question volume over time."""
@@ -652,9 +859,10 @@ def plot_volume_over_time(df):
         x='date',
         y='count',
         title="Question Volume Over Time",
-        labels={'count': 'Number of Questions', 'date': 'Date'}
+        labels={'count': 'Number of Questions', 'date': 'Date'},
+        color_discrete_sequence=['#FF6B35']
     )
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_volume_by_product_over_time(df):
     """Plot question volume by product type over time."""
@@ -671,7 +879,7 @@ def plot_volume_by_product_over_time(df):
         title="Question Volume by Product Type Over Time",
         labels={'count': 'Number of Questions', 'date': 'Date'}
     )
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_heatmap_weekday_hour(df, metric='count'):
     """Plot heatmap of weekday vs hour."""
@@ -697,9 +905,10 @@ def plot_heatmap_weekday_hour(df, metric='count'):
         pivot,
         labels=dict(x="Hour of Day", y="Weekday", color=z_values),
         title=title,
-        aspect="auto"
+        aspect="auto",
+        color_continuous_scale='Viridis'
     )
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_topic_distribution(df):
     """Plot topic distribution."""
@@ -713,10 +922,11 @@ def plot_topic_distribution(df):
         y=topic_counts.index,
         orientation='h',
         title="Questions per Topic",
-        labels={'x': 'Count', 'y': 'Topic'}
+        labels={'x': 'Count', 'y': 'Topic'},
+        color_discrete_sequence=['#FF6B35']
     )
     fig.update_layout(yaxis={'categoryorder': 'total ascending'})
-    return fig
+    return apply_dark_theme(fig)
 
 def plot_embeddings_2d(df, color_by='topic_id'):
     """Plot 2D projection of embeddings."""
@@ -749,7 +959,7 @@ def plot_embeddings_2d(df, color_by='topic_id'):
             title=f"2D Embedding Projection (colored by {color_by})",
             labels={'x': 'PC1', 'y': 'PC2'}
         )
-        return fig
+        return apply_dark_theme(fig)
     except Exception as e:
         st.warning(f"Error creating embedding plot: {str(e)}")
         return None
@@ -772,9 +982,10 @@ def plot_sentiment_vs_csat(df):
         y='csat_score',
         title="Sentiment Score vs CSAT Score",
         labels={'sentiment_score': 'Sentiment Score', 'csat_score': 'CSAT Score'},
-        trendline="ols"
+        trendline="ols",
+        color_discrete_sequence=['#FF6B35']
     )
-    return fig
+    return apply_dark_theme(fig)
 
 # ============================================================================
 # TAB BUILDING FUNCTIONS
@@ -789,7 +1000,7 @@ def build_overview_tab(df):
         return
     
     # Key metrics
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric("Total Conversations", len(df))
@@ -800,9 +1011,9 @@ def build_overview_tab(df):
     with col3:
         if 'sentiment_score' in df.columns and df['sentiment_score'].notna().any():
             avg_sentiment = df['sentiment_score'].mean()
-            st.metric("Average Sentiment Score", f"{avg_sentiment:.2f}")
+            st.metric("Avg Sentiment", f"{avg_sentiment:.2f}")
         else:
-            st.metric("Average Sentiment Score", "N/A")
+            st.metric("Avg Sentiment", "N/A")
     
     with col4:
         if 'user_happiness' in df.columns:
@@ -811,6 +1022,84 @@ def build_overview_tab(df):
             st.metric("Happy Users", f"{happy_pct:.1f}%")
         else:
             st.metric("Happy Users", "N/A")
+    
+    with col5:
+        if 'intent' in df.columns:
+            high_urgency = (df['urgency'] == 'high').sum() + (df['urgency'] == 'critical').sum() if 'urgency' in df.columns else 0
+            st.metric("High Priority", high_urgency)
+        else:
+            st.metric("High Priority", "N/A")
+    
+    st.divider()
+    
+    # Segment Analysis
+    st.subheader("🎯 Segment Analysis")
+    segment_analysis = analyze_segments(df)
+    
+    if segment_analysis:
+        # Product Type Analysis
+        if 'by_product' in segment_analysis:
+            st.markdown("**Questions by Product Type**")
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                product_data = segment_analysis['by_product'].reset_index()
+                fig = px.bar(
+                    product_data,
+                    x='product_type',
+                    y='question_count',
+                    labels={'question_count': 'Number of Questions', 'product_type': 'Product Type'},
+                    color='question_count',
+                    color_continuous_scale='Oranges',
+                    title="Question Volume by Product Type"
+                )
+                fig = apply_dark_theme(fig)
+                st.plotly_chart(fig, use_container_width=True, key="overview_product_segment")
+            
+            with col2:
+                st.dataframe(
+                    segment_analysis['by_product'][['question_count', 'avg_sentiment', 'avg_happiness']],
+                    use_container_width=True,
+                    key="overview_product_table"
+                )
+        
+        # Intent Analysis
+        if 'by_intent' in segment_analysis and len(segment_analysis['by_intent']) > 0:
+            st.markdown("**Questions by Intent**")
+            intent_data = segment_analysis['by_intent'].reset_index()
+            fig = px.bar(
+                intent_data,
+                x='intent',
+                y='question_count',
+                labels={'question_count': 'Number of Questions', 'intent': 'Question Intent'},
+                color='avg_sentiment',
+                color_continuous_scale='RdYlGn',
+                title="Question Distribution by Intent"
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="overview_intent_dist")
+        
+        # Channel Analysis
+        if 'by_channel' in segment_analysis:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Questions by Channel**")
+                channel_data = segment_analysis['by_channel'].reset_index()
+                fig = px.pie(
+                    channel_data,
+                    values='question_count',
+                    names='channel',
+                    title="Question Distribution by Channel"
+                )
+                fig = apply_dark_theme(fig)
+                st.plotly_chart(fig, use_container_width=True, key="overview_channel_pie")
+            
+            with col2:
+                st.markdown("**Channel Performance**")
+                st.dataframe(
+                    segment_analysis['by_channel'][['question_count', 'avg_sentiment', 'avg_happiness']],
+                    use_container_width=True,
+                    key="overview_channel_table"
+                )
     
     st.divider()
     
@@ -823,8 +1112,10 @@ def build_overview_tab(df):
         fig = px.bar(
             x=product_counts.index,
             y=product_counts.values,
-            labels={'x': 'Product Type', 'y': 'Count'}
+            labels={'x': 'Product Type', 'y': 'Count'},
+            color_discrete_sequence=['#FF6B35']
         )
+        fig = apply_dark_theme(fig)
         st.plotly_chart(fig, use_container_width=True, key="overview_product_type")
     
     with col2:
@@ -833,8 +1124,10 @@ def build_overview_tab(df):
         fig = px.bar(
             x=channel_counts.index,
             y=channel_counts.values,
-            labels={'x': 'Channel', 'y': 'Count'}
+            labels={'x': 'Channel', 'y': 'Count'},
+            color_discrete_sequence=['#FF6B35']
         )
+        fig = apply_dark_theme(fig)
         st.plotly_chart(fig, use_container_width=True, key="overview_channel")
     
     # Sentiment and happiness overview
@@ -1107,6 +1400,195 @@ def build_tables_tab(df):
                     report_text = generate_email_report(df)
                     st.text(report_text)
 
+def build_ai_insights_tab(df):
+    """Build the AI Insights tab with sophisticated analysis."""
+    st.header("🤖 AI-Powered Insights")
+    
+    if df is None or df.empty:
+        st.warning("No data available.")
+        return
+    
+    client = get_openai_client()
+    if client is None:
+        st.warning("⚠️ OpenAI API key required for AI insights. Please enter your API key in the sidebar.")
+        return
+    
+    # Generate comprehensive data summary for AI
+    with st.spinner("Generating AI insights..."):
+        # Prepare data summary
+        summary_parts = []
+        
+        # Basic stats
+        summary_parts.append(f"Total conversations: {len(df)}")
+        
+        if 'product_type' in df.columns:
+            product_counts = df['product_type'].value_counts().to_dict()
+            summary_parts.append(f"Product distribution: {product_counts}")
+        
+        if 'channel' in df.columns:
+            channel_counts = df['channel'].value_counts().to_dict()
+            summary_parts.append(f"Channel distribution: {channel_counts}")
+        
+        if 'sentiment_label' in df.columns:
+            sentiment_dist = df['sentiment_label'].value_counts().to_dict()
+            avg_sentiment = df['sentiment_score'].mean() if 'sentiment_score' in df.columns else None
+            summary_parts.append(f"Sentiment distribution: {sentiment_dist}, Average score: {avg_sentiment}")
+        
+        if 'user_happiness' in df.columns:
+            happiness_dist = df['user_happiness'].value_counts().to_dict()
+            avg_happiness = df['happiness_score'].mean() if 'happiness_score' in df.columns else None
+            summary_parts.append(f"Happiness distribution: {happiness_dist}, Average score: {avg_happiness}")
+        
+        # Segment analysis
+        segment_analysis = analyze_segments(df)
+        if segment_analysis:
+            if 'by_product' in segment_analysis:
+                summary_parts.append(f"Product segment analysis: {segment_analysis['by_product'].to_dict()}")
+            if 'by_intent' in segment_analysis:
+                summary_parts.append(f"Intent analysis: {segment_analysis['by_intent'].head().to_dict()}")
+        
+        # Top questions by volume
+        if 'product_type' in df.columns:
+            top_product_issues = df.groupby('product_type').size().sort_values(ascending=False).head(3)
+            summary_parts.append(f"Top product types with most questions: {top_product_issues.to_dict()}")
+        
+        # Sample questions
+        sample_questions = df['user_question'].head(10).tolist() if 'user_question' in df.columns else []
+        summary_parts.append(f"Sample questions: {sample_questions[:5]}")
+        
+        data_summary = "\n".join(summary_parts)
+        
+        # Generate insights
+        insights = generate_insights_openai(client, data_summary)
+    
+    # Display insights
+    st.markdown("### 📌 Key Insights")
+    if insights.get('key_insights'):
+        for i, insight in enumerate(insights['key_insights'], 1):
+            st.markdown(f"**{i}. {insight}**")
+    else:
+        st.info("No insights generated yet. Run the analysis to see insights.")
+    
+    st.divider()
+    
+    # Recommendations
+    st.markdown("### 💡 Recommendations")
+    if insights.get('recommendations'):
+        for i, rec in enumerate(insights['recommendations'], 1):
+            st.markdown(f"{i}. {rec}")
+    
+    st.divider()
+    
+    # Concerns and Opportunities
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### ⚠️ Areas of Concern")
+        if insights.get('concerns'):
+            for concern in insights['concerns']:
+                st.markdown(f"• {concern}")
+        else:
+            st.info("No major concerns identified.")
+    
+    with col2:
+        st.markdown("### 🎯 Opportunities")
+        if insights.get('opportunities'):
+            for opp in insights['opportunities']:
+                st.markdown(f"• {opp}")
+        else:
+            st.info("No opportunities identified.")
+    
+    st.divider()
+    
+    # Detailed Segment Analysis
+    st.markdown("### 📊 Detailed Segment Analysis")
+    
+    segment_analysis = analyze_segments(df)
+    
+    if segment_analysis:
+        # Product Type Deep Dive
+        if 'by_product' in segment_analysis:
+            st.markdown("#### Product Type Performance")
+            product_data = segment_analysis['by_product'].reset_index()
+            
+            # Create a comprehensive chart
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                x=product_data['product_type'],
+                y=product_data['question_count'],
+                name='Question Count',
+                marker_color='#FF6B35',
+                yaxis='y'
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=product_data['product_type'],
+                y=product_data['avg_sentiment'] * 100,  # Scale for visibility
+                name='Avg Sentiment (scaled)',
+                mode='lines+markers',
+                yaxis='y2',
+                line=dict(color='#4CAF50', width=3)
+            ))
+            
+            fig.update_layout(
+                title="Product Type: Questions vs Sentiment",
+                xaxis_title="Product Type",
+                yaxis=dict(title="Question Count", side='left'),
+                yaxis2=dict(title="Sentiment Score (scaled)", side='right', overlaying='y'),
+                hovermode='x unified'
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="insights_product_performance")
+        
+        # Intent Analysis
+        if 'by_intent' in segment_analysis and len(segment_analysis['by_intent']) > 0:
+            st.markdown("#### Question Intent Distribution")
+            intent_data = segment_analysis['by_intent'].reset_index()
+            
+            # Treemap or sunburst would be nice but bar works
+            fig = px.bar(
+                intent_data,
+                x='intent',
+                y='question_count',
+                color='avg_sentiment',
+                color_continuous_scale='RdYlGn',
+                labels={'question_count': 'Number of Questions', 'intent': 'Intent Type'},
+                title="Questions by Intent with Sentiment Heatmap"
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="insights_intent_analysis")
+        
+        # Urgency Analysis
+        if 'by_urgency' in segment_analysis:
+            st.markdown("#### Urgency Distribution")
+            urgency_data = segment_analysis['by_urgency'].reset_index()
+            
+            fig = px.bar(
+                urgency_data,
+                x='urgency',
+                y='question_count',
+                color='urgency',
+                color_discrete_map={
+                    'low': '#4CAF50',
+                    'medium': '#FFC107',
+                    'high': '#FF9800',
+                    'critical': '#F44336'
+                },
+                labels={'question_count': 'Number of Questions', 'urgency': 'Urgency Level'},
+                title="Question Distribution by Urgency Level"
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="insights_urgency")
+    
+    # Summary
+    st.divider()
+    st.markdown("### 📝 Executive Summary")
+    if insights.get('summary'):
+        st.info(insights['summary'])
+    else:
+        st.info("Generate insights to see executive summary.")
+
 def build_diagnostics_tab(df):
     """Build the Diagnostics / Data Quality tab."""
     st.header("🔍 Diagnostics & Data Quality")
@@ -1145,8 +1627,10 @@ def build_diagnostics_tab(df):
             x=missing_data.index,
             y=missing_data.values,
             title="Missing Values by Column",
-            labels={'x': 'Column', 'y': 'Missing Count'}
+            labels={'x': 'Column', 'y': 'Missing Count'},
+            color_discrete_sequence=['#FF6B35']
         )
+        fig = apply_dark_theme(fig)
         st.plotly_chart(fig, use_container_width=True, key="missing_data_chart")
     else:
         st.success("No missing data found!")
@@ -1167,6 +1651,72 @@ def build_diagnostics_tab(df):
 
 def main():
     """Main Streamlit app."""
+    # Password protection
+    PASSWORD = "SmartChat2000#!"
+    
+    # Initialize authentication state
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    
+    # Password check - show login screen if not authenticated
+    if not st.session_state.authenticated:
+        # Apply black theme for login screen
+        login_css = """
+        <style>
+            .stApp {
+                background-color: #000000 !important;
+            }
+            .main .block-container {
+                background-color: #000000 !important;
+                padding-top: 10rem;
+            }
+            h1, h2, h3, p, label {
+                color: #ffffff !important;
+            }
+            .stTextInput > div > div > input {
+                background-color: #1a1a1a !important;
+                color: #ffffff !important;
+                border: 1px solid #333333 !important;
+            }
+            .stButton > button {
+                background-color: #FF6B35 !important;
+                color: #ffffff !important;
+            }
+        </style>
+        """
+        st.markdown(login_css, unsafe_allow_html=True)
+        
+        # Centered login form
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("""
+            <div style='text-align: center; margin-bottom: 30px;'>
+                <h1 style='color: #ffffff; font-size: 36px; margin-bottom: 10px;'>🔒 Secure Access</h1>
+                <p style='color: #cccccc; font-size: 18px;'>Please enter the password to access the Chatbot Conversation Analyzer</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            password_input = st.text_input(
+                "Password",
+                type="password",
+                key="password_input",
+                label_visibility="visible"
+            )
+            
+            login_button = st.button("Login", type="primary", use_container_width=True)
+            
+            if login_button:
+                if password_input == PASSWORD:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect password. Please try again.")
+            
+            st.markdown("<br><br>", unsafe_allow_html=True)
+        
+        return  # Don't show the main app until authenticated
+    
     # Enpal branding header with black background and high contrast
     # Try to load Enpal logo if available
     import os
@@ -1210,16 +1760,16 @@ def main():
     
     css_style = """
     <style>
-        /* Main app background - premium black */
+        /* Main app background - pure black */
         .stApp {
-            background-color: #0a0a0a !important;
+            background-color: #000000 !important;
             color: #ffffff;
         }
         
         /* Main content area */
         .main .block-container {
             padding-top: 2rem;
-            background-color: #0a0a0a;
+            background-color: #000000 !important;
             color: #ffffff;
         }
         
@@ -1234,31 +1784,31 @@ def main():
             font-weight: 600;
         }
         
-        /* Tabs - highly visible with dark theme */
+        /* Tabs - black theme */
         .stTabs [data-baseweb="tab-list"] {
-            background-color: #1a1a1a;
+            background-color: #000000 !important;
             border-radius: 8px 8px 0 0;
             padding: 8px 8px 0 8px;
             gap: 4px;
         }
         
         .stTabs [data-baseweb="tab"] {
-            background-color: #2a2a2a;
+            background-color: #1a1a1a !important;
             color: #ffffff !important;
             border-radius: 8px 8px 0 0;
             padding: 12px 24px;
             font-weight: 500;
-            border: 1px solid #3a3a3a;
+            border: 1px solid #333333;
             margin-right: 4px;
         }
         
         .stTabs [data-baseweb="tab"]:hover {
-            background-color: #3a3a3a;
+            background-color: #2a2a2a !important;
             color: #ffffff !important;
         }
         
         .stTabs [aria-selected="true"] {
-            background-color: #0a0a0a !important;
+            background-color: #000000 !important;
             color: #ffffff !important;
             border-bottom: 3px solid #FF6B35;
             font-weight: 600;
@@ -1266,31 +1816,42 @@ def main():
         
         /* Tab content area */
         .stTabs [data-baseweb="tab-panel"] {
-            background-color: #0a0a0a;
+            background-color: #000000 !important;
             padding: 20px;
         }
         
-        /* Sidebar - dark theme */
+        /* Sidebar - black theme */
         .css-1d391kg {
-            background-color: #1a1a1a !important;
+            background-color: #000000 !important;
             color: #ffffff !important;
         }
         
         [data-testid="stSidebar"] {
-            background-color: #1a1a1a !important;
+            background-color: #000000 !important;
         }
         
         [data-testid="stSidebar"] * {
             color: #ffffff !important;
         }
         
+        /* Sidebar content background */
+        [data-testid="stSidebar"] .css-1d391kg {
+            background-color: #000000 !important;
+        }
+        
         /* Input fields */
         .stTextInput > div > div > input, 
         .stTextArea > div > div > textarea,
         .stSelectbox > div > div > select {
-            background-color: #2a2a2a !important;
+            background-color: #1a1a1a !important;
             color: #ffffff !important;
-            border: 1px solid #3a3a3a;
+            border: 1px solid #333333 !important;
+        }
+        
+        /* Input field containers */
+        .stTextInput > div > div,
+        .stTextArea > div > div {
+            background-color: #1a1a1a !important;
         }
         
         /* Buttons */
@@ -1316,15 +1877,28 @@ def main():
             color: #cccccc !important;
         }
         
+        [data-testid="stMetricContainer"] {
+            background-color: #1a1a1a !important;
+            border: 1px solid #333333 !important;
+            padding: 1rem;
+            border-radius: 8px;
+        }
+        
         /* Dataframes */
         .stDataFrame, .dataframe {
-            background-color: #1a1a1a !important;
+            background-color: #000000 !important;
             color: #ffffff !important;
+        }
+        
+        /* DataFrame containers */
+        .stDataFrame > div,
+        .dataframe {
+            background-color: #1a1a1a !important;
         }
         
         /* Dividers */
         hr {
-            border-color: #3a3a3a !important;
+            border-color: #333333 !important;
         }
         
         /* Info/Warning/Success boxes */
@@ -1339,9 +1913,18 @@ def main():
             color: #ffffff !important;
         }
         
+        .stCheckbox > div {
+            background-color: #000000 !important;
+        }
+        
         /* Select boxes */
         .stSelectbox label, .stMultiSelect label {
             color: #ffffff !important;
+        }
+        
+        .stSelectbox > div,
+        .stMultiSelect > div {
+            background-color: #1a1a1a !important;
         }
         
         /* Slider */
@@ -1349,10 +1932,14 @@ def main():
             color: #ffffff !important;
         }
         
+        .stSlider > div {
+            background-color: #000000 !important;
+        }
+        
         /* File uploader */
         .stFileUploader {
             background-color: #1a1a1a !important;
-            border: 2px dashed #3a3a3a !important;
+            border: 2px dashed #333333 !important;
         }
         
         .stFileUploader label {
@@ -1361,13 +1948,33 @@ def main():
         
         /* Expander */
         .streamlit-expanderHeader {
-            background-color: #2a2a2a !important;
+            background-color: #1a1a1a !important;
             color: #ffffff !important;
+        }
+        
+        .streamlit-expanderContent {
+            background-color: #000000 !important;
         }
         
         /* Radio buttons */
         .stRadio label {
             color: #ffffff !important;
+        }
+        
+        .stRadio > div {
+            background-color: #000000 !important;
+        }
+        
+        /* All divs and containers - ensure black background */
+        div[data-baseweb="base-input"],
+        div[data-baseweb="select"],
+        div[data-baseweb="textarea"] {
+            background-color: #1a1a1a !important;
+        }
+        
+        /* Plotly chart containers */
+        .js-plotly-plot {
+            background-color: #000000 !important;
         }
         
         /* Use Enpal brand font throughout */
@@ -1382,16 +1989,38 @@ def main():
         }
         
         ::-webkit-scrollbar-track {
-            background: #1a1a1a;
+            background: #000000;
         }
         
         ::-webkit-scrollbar-thumb {
-            background: #3a3a3a;
+            background: #333333;
             border-radius: 5px;
         }
         
         ::-webkit-scrollbar-thumb:hover {
             background: #4a4a4a;
+        }
+        
+        /* Remove any white backgrounds */
+        body {
+            background-color: #000000 !important;
+        }
+        
+        /* Ensure all Streamlit elements have black background */
+        .element-container,
+        .stMarkdown,
+        .stText {
+            background-color: #000000 !important;
+        }
+        
+        /* Header container */
+        header[data-testid="stHeader"] {
+            background-color: #000000 !important;
+        }
+        
+        /* Footer */
+        footer {
+            background-color: #000000 !important;
         }
     </style>
     """
@@ -1406,6 +2035,15 @@ def main():
     
     # Sidebar
     with st.sidebar:
+        # Logout button at the top
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🚪 Logout", key="logout_button"):
+                st.session_state.authenticated = False
+                st.rerun()
+        
+        st.divider()
+        
         st.header("🔑 OpenAI API Key")
         api_key_input = st.text_input(
             "Enter OpenAI API Key",
@@ -1477,6 +2115,13 @@ def main():
             value=5,
             help="Number of topics to identify",
             key="n_clusters_slider"
+        )
+        
+        analyze_intents_flag = st.checkbox(
+            "🤖 Advanced AI Analysis (Question Intent & Insights)",
+            value=False,
+            help="Enable sophisticated AI analysis: question categorization, intent detection, urgency assessment, and actionable insights",
+            key="analyze_intents_checkbox"
         )
         
         st.divider()
@@ -1580,6 +2225,10 @@ def main():
             # Compute topics if requested
             if compute_topics_flag:
                 df_processed = compute_topics(df_processed, n_clusters=n_clusters)
+            
+            # Advanced AI analysis (intent, categorization, etc.)
+            if analyze_intents_flag:
+                df_processed = enrich_data_with_advanced_analysis(df_processed, analyze_intents=True)
             
             # Apply filters
             filters = {
