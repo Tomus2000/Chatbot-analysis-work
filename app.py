@@ -259,7 +259,6 @@ def get_openai_client():
         st.error(f"Error initializing OpenAI client: {str(e)}")
         return None
 
-@st.cache_data
 def analyze_sentiment_openai(client, text, batch_size=10):
     """Analyze sentiment using OpenAI API with improved prompts."""
     if not text or pd.isna(text) or text.strip() == '':
@@ -312,7 +311,6 @@ Be nuanced: a question about a problem doesn't necessarily mean negative sentime
         st.warning(f"Error analyzing sentiment: {str(e)}")
         return {"label": "neutral", "score": 0.0}
 
-@st.cache_data
 def analyze_happiness_openai(client, question, answer):
     """Analyze user happiness/satisfaction using OpenAI API with improved prompt."""
     combined_text = f"Question: {question}\nAnswer: {answer}"
@@ -368,7 +366,6 @@ Be accurate: "happy" means the user is satisfied and the answer was helpful. "un
         st.warning(f"Error analyzing happiness: {str(e)}")
         return {"label": "neutral", "score": 0.5}
 
-@st.cache_data
 def analyze_sentiment_field_openai(client, text, field_name="text"):
     """Analyze sentiment for a specific field (Frage, Antwort, or Feedback)."""
     if not text or pd.isna(text) or str(text).strip() == '':
@@ -416,7 +413,6 @@ Sei nuanciert: Eine Frage über ein Problem bedeutet nicht unbedingt negatives S
         st.warning(f"Fehler bei Sentiment-Analyse: {str(e)}")
         return {"label": "neutral", "score": 0.0}
 
-@st.cache_data
 def analyze_resolution_status_openai(client, frage, antwort, antwort_gefunden, feedback=""):
     """Analyze resolution status, complexity, and escalation needs."""
     combined = f"Frage: {frage}\nAntwort: {antwort}\nAntwort gefunden: {antwort_gefunden}"
@@ -482,7 +478,6 @@ Antworte mit NUR einem JSON-Objekt:
             "needs_escalation": False
         }
 
-@st.cache_data
 def analyze_user_happiness_comprehensive_openai(client, frage, antwort, antwort_gefunden, feedback="", feedback_typ=""):
     """Comprehensive user happiness analysis considering all factors."""
     context = f"Frage: {frage}\nAntwort: {antwort}\nAntwort gefunden: {antwort_gefunden}"
@@ -551,7 +546,6 @@ Antworte mit NUR einem JSON-Objekt:
         st.warning(f"Fehler bei Happiness-Analyse: {str(e)}")
         return {"label": "neutral", "score": 0.5, "is_unhappy": False}
 
-@st.cache_data
 def get_embeddings_openai(client, texts, batch_size=100):
     """Get embeddings for texts using OpenAI API."""
     if not texts or len(texts) == 0:
@@ -671,7 +665,6 @@ def enrich_data_with_openai(df, recompute_all=False):
 # ADVANCED AI ANALYSIS FUNCTIONS
 # ============================================================================
 
-@st.cache_data
 def analyze_question_intent_openai(client, question):
     """Analyze question intent and category using AI."""
     if not question or pd.isna(question) or str(question).strip() == '':
@@ -714,7 +707,6 @@ Be accurate and thoughtful in your categorization."""
     except Exception as e:
         return {"intent": "unknown", "category": "general", "urgency": "low", "question_type": "other", "needs_human": False}
 
-@st.cache_data
 def generate_insights_openai(client, df_summary):
     """Generate actionable insights from data summary using AI."""
     try:
