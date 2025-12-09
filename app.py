@@ -1158,11 +1158,16 @@ def apply_dark_theme(fig):
     return fig
 
 def plot_sentiment_distribution(df):
-    """Plot sentiment distribution."""
-    if df is None or df.empty or 'sentiment_label' not in df.columns:
+    """Plot sentiment distribution - handles both English and German column formats."""
+    if df is None or df.empty:
         return None
     
-    sentiment_counts = df['sentiment_label'].value_counts()
+    # Check for sentiment label in both formats
+    sentiment_label_col = 'frage_sentiment_label' if 'frage_sentiment_label' in df.columns else ('sentiment_label' if 'sentiment_label' in df.columns else None)
+    if not sentiment_label_col:
+        return None
+    
+    sentiment_counts = df[sentiment_label_col].value_counts()
     
     fig = px.bar(
         x=sentiment_counts.index,
@@ -1176,11 +1181,16 @@ def plot_sentiment_distribution(df):
     return apply_dark_theme(fig)
 
 def plot_happiness_distribution(df):
-    """Plot happiness distribution."""
-    if df is None or df.empty or 'user_happiness' not in df.columns:
+    """Plot happiness distribution - handles both English and German column formats."""
+    if df is None or df.empty:
         return None
     
-    happiness_counts = df['user_happiness'].value_counts()
+    # Check for happiness in both formats
+    happiness_col = 'user_happiness_label' if 'user_happiness_label' in df.columns else ('user_happiness' if 'user_happiness' in df.columns else None)
+    if not happiness_col:
+        return None
+    
+    happiness_counts = df[happiness_col].value_counts()
     
     fig = px.bar(
         x=happiness_counts.index,
@@ -1194,31 +1204,45 @@ def plot_happiness_distribution(df):
     return apply_dark_theme(fig)
 
 def plot_sentiment_by_product(df):
-    """Plot sentiment by product type."""
-    if df is None or df.empty or 'sentiment_label' not in df.columns:
+    """Plot sentiment by product type - handles both English and German column formats."""
+    if df is None or df.empty:
         return None
     
-    crosstab = pd.crosstab(df['product_type'], df['sentiment_label'])
+    # Check for required columns
+    sentiment_label_col = 'frage_sentiment_label' if 'frage_sentiment_label' in df.columns else ('sentiment_label' if 'sentiment_label' in df.columns else None)
+    product_col = 'product_type' if 'product_type' in df.columns else ('team' if 'team' in df.columns else None)
+    
+    if not sentiment_label_col or not product_col:
+        return None
+    
+    crosstab = pd.crosstab(df[product_col], df[sentiment_label_col])
     
     fig = px.bar(
         crosstab,
-        title="Sentiment by Product Type",
-        labels={'value': 'Count', 'index': 'Product Type'},
+        title="Sentiment by " + ('Product Type' if product_col == 'product_type' else 'Team'),
+        labels={'value': 'Count', 'index': ('Product Type' if product_col == 'product_type' else 'Team')},
         barmode='stack'
     )
     return apply_dark_theme(fig)
 
 def plot_happiness_by_product(df):
-    """Plot happiness by product type."""
-    if df is None or df.empty or 'user_happiness' not in df.columns:
+    """Plot happiness by product type - handles both English and German column formats."""
+    if df is None or df.empty:
         return None
     
-    crosstab = pd.crosstab(df['product_type'], df['user_happiness'])
+    # Check for required columns
+    happiness_col = 'user_happiness_label' if 'user_happiness_label' in df.columns else ('user_happiness' if 'user_happiness' in df.columns else None)
+    product_col = 'product_type' if 'product_type' in df.columns else ('team' if 'team' in df.columns else None)
+    
+    if not happiness_col or not product_col:
+        return None
+    
+    crosstab = pd.crosstab(df[product_col], df[happiness_col])
     
     fig = px.bar(
         crosstab,
-        title="Happiness by Product Type",
-        labels={'value': 'Count', 'index': 'Product Type'},
+        title="Happiness by " + ('Product Type' if product_col == 'product_type' else 'Team'),
+        labels={'value': 'Count', 'index': ('Product Type' if product_col == 'product_type' else 'Team')},
         barmode='stack'
     )
     return apply_dark_theme(fig)
@@ -1405,15 +1429,19 @@ def build_overview_tab(df):
             st.metric("Unique Conversation IDs", len(df))
     
     with col3:
-        if 'sentiment_score' in df.columns and df['sentiment_score'].notna().any():
-            avg_sentiment = df['sentiment_score'].mean()
+        # Check for sentiment score in both formats
+        sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+        if sentiment_col and df[sentiment_col].notna().any():
+            avg_sentiment = df[sentiment_col].mean()
             st.metric("Avg Sentiment", f"{avg_sentiment:.2f}")
         else:
             st.metric("Avg Sentiment", "N/A")
     
     with col4:
-        if 'user_happiness' in df.columns:
-            happy_count = (df['user_happiness'] == 'happy').sum()
+        # Check for happiness in both formats
+        happiness_col = 'user_happiness_label' if 'user_happiness_label' in df.columns else ('user_happiness' if 'user_happiness' in df.columns else None)
+        if happiness_col:
+            happy_count = (df[happiness_col] == 'happy').sum()
             happy_pct = (happy_count / len(df)) * 100 if len(df) > 0 else 0
             st.metric("Happy Users", f"{happy_pct:.1f}%")
         else:
@@ -1518,44 +1546,76 @@ def build_overview_tab(df):
     
     st.divider()
     
-    # Product type distribution
+    # Product type distribution (only show if columns exist)
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("Questions by Product Type")
-        product_counts = df['product_type'].value_counts()
-        fig = px.bar(
-            x=product_counts.index,
-            y=product_counts.values,
-            labels={'x': 'Product Type', 'y': 'Count'},
-            color_discrete_sequence=['#FF6B35']
-        )
-        fig = apply_dark_theme(fig)
-        st.plotly_chart(fig, use_container_width=True, key="overview_product_type")
+        if 'product_type' in df.columns:
+            st.subheader("Questions by Product Type")
+            product_counts = df['product_type'].value_counts()
+            fig = px.bar(
+                x=product_counts.index,
+                y=product_counts.values,
+                labels={'x': 'Product Type', 'y': 'Count'},
+                color_discrete_sequence=['#FF6B35']
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="overview_product_type")
+        elif 'team' in df.columns:
+            st.subheader("Questions by Team")
+            team_counts = df['team'].value_counts().head(10)  # Show top 10 teams
+            fig = px.bar(
+                x=team_counts.index,
+                y=team_counts.values,
+                labels={'x': 'Team', 'y': 'Count'},
+                color_discrete_sequence=['#FF6B35']
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="overview_team")
+        else:
+            st.info("No product type or team data available.")
     
     with col2:
-        st.subheader("Questions by Channel")
-        channel_counts = df['channel'].value_counts()
-        fig = px.bar(
-            x=channel_counts.index,
-            y=channel_counts.values,
-            labels={'x': 'Channel', 'y': 'Count'},
-            color_discrete_sequence=['#FF6B35']
-        )
-        fig = apply_dark_theme(fig)
-        st.plotly_chart(fig, use_container_width=True, key="overview_channel")
+        if 'channel' in df.columns:
+            st.subheader("Questions by Channel")
+            channel_counts = df['channel'].value_counts()
+            fig = px.bar(
+                x=channel_counts.index,
+                y=channel_counts.values,
+                labels={'x': 'Channel', 'y': 'Count'},
+                color_discrete_sequence=['#FF6B35']
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="overview_channel")
+        elif 'antwort_gefunden' in df.columns:
+            st.subheader("Answer Found Status")
+            antwort_counts = df['antwort_gefunden'].value_counts()
+            fig = px.bar(
+                x=antwort_counts.index,
+                y=antwort_counts.values,
+                labels={'x': 'Answer Found', 'y': 'Count'},
+                color_discrete_sequence=['#FF6B35']
+            )
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="overview_antwort")
+        else:
+            st.info("No channel data available.")
     
     # Sentiment and happiness overview
     col1, col2 = st.columns(2)
     
     with col1:
-        if 'sentiment_label' in df.columns and df['sentiment_label'].notna().any():
+        # Check for sentiment label in both formats
+        sentiment_label_col = 'frage_sentiment_label' if 'frage_sentiment_label' in df.columns else ('sentiment_label' if 'sentiment_label' in df.columns else None)
+        if sentiment_label_col and df[sentiment_label_col].notna().any():
             fig = plot_sentiment_distribution(df)
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="overview_sentiment_dist")
     
     with col2:
-        if 'user_happiness' in df.columns and df['user_happiness'].notna().any():
+        # Check for happiness in both formats
+        happiness_col = 'user_happiness_label' if 'user_happiness_label' in df.columns else ('user_happiness' if 'user_happiness' in df.columns else None)
+        if happiness_col and df[happiness_col].notna().any():
             fig = plot_happiness_distribution(df)
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="overview_happiness_dist")
@@ -1572,13 +1632,17 @@ def build_sentiment_tab(df):
     col1, col2 = st.columns(2)
     
     with col1:
-        if 'sentiment_label' in df.columns and df['sentiment_label'].notna().any():
+        # Check for sentiment label in both formats
+        sentiment_label_col = 'frage_sentiment_label' if 'frage_sentiment_label' in df.columns else ('sentiment_label' if 'sentiment_label' in df.columns else None)
+        if sentiment_label_col and df[sentiment_label_col].notna().any():
             fig = plot_sentiment_distribution(df)
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_sentiment_dist")
     
     with col2:
-        if 'user_happiness' in df.columns and df['user_happiness'].notna().any():
+        # Check for happiness in both formats
+        happiness_col = 'user_happiness_label' if 'user_happiness_label' in df.columns else ('user_happiness' if 'user_happiness' in df.columns else None)
+        if happiness_col and df[happiness_col].notna().any():
             fig = plot_happiness_distribution(df)
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_happiness_dist")
@@ -1587,13 +1651,17 @@ def build_sentiment_tab(df):
     col1, col2 = st.columns(2)
     
     with col1:
-        if 'sentiment_label' in df.columns and df['sentiment_label'].notna().any():
+        # Check for sentiment label in both formats
+        sentiment_label_col = 'frage_sentiment_label' if 'frage_sentiment_label' in df.columns else ('sentiment_label' if 'sentiment_label' in df.columns else None)
+        if sentiment_label_col and df[sentiment_label_col].notna().any():
             fig = plot_sentiment_by_product(df)
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_sentiment_by_product")
     
     with col2:
-        if 'user_happiness' in df.columns and df['user_happiness'].notna().any():
+        # Check for happiness in both formats
+        happiness_col = 'user_happiness_label' if 'user_happiness_label' in df.columns else ('user_happiness' if 'user_happiness' in df.columns else None)
+        if happiness_col and df[happiness_col].notna().any():
             fig = plot_happiness_by_product(df)
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="sentiment_tab_happiness_by_product")
