@@ -867,20 +867,46 @@ def enrich_data_with_advanced_analysis(df, analyze_intents=False):
     return df
 
 def analyze_segments(df):
-    """Perform comprehensive segment analysis."""
+    """Perform comprehensive segment analysis - handles both English and German column formats."""
     if df is None or df.empty:
         return {}
     
     analysis = {}
     
+    # Helper function to get available column names (handles both English and German formats)
+    def get_count_col():
+        if 'frage' in df.columns:
+            return 'frage'
+        elif 'user_question' in df.columns:
+            return 'user_question'
+        return None
+    
+    def get_sentiment_col():
+        if 'frage_sentiment_score' in df.columns:
+            return 'frage_sentiment_score'
+        elif 'sentiment_score' in df.columns:
+            return 'sentiment_score'
+        return None
+    
+    def get_happiness_col():
+        if 'user_happiness_score' in df.columns:
+            return 'user_happiness_score'
+        elif 'happiness_score' in df.columns:
+            return 'happiness_score'
+        return None
+    
+    count_col = get_count_col()
+    sentiment_col = get_sentiment_col()
+    happiness_col = get_happiness_col()
+    
     # Segment by product type
-    if 'product_type' in df.columns:
-        agg_dict = {'user_question': 'count'}
+    if 'product_type' in df.columns and count_col:
+        agg_dict = {count_col: 'count'}
         
-        if 'sentiment_score' in df.columns:
-            agg_dict['sentiment_score'] = 'mean'
-        if 'happiness_score' in df.columns:
-            agg_dict['happiness_score'] = 'mean'
+        if sentiment_col:
+            agg_dict[sentiment_col] = 'mean'
+        if happiness_col:
+            agg_dict[happiness_col] = 'mean'
         
         product_analysis = df.groupby('product_type').agg(agg_dict).round(3)
         
@@ -890,43 +916,43 @@ def analyze_segments(df):
             product_analysis = product_analysis.join(intent_dist)
         
         # Rename columns
-        column_mapping = {'user_question': 'question_count'}
-        if 'sentiment_score' in product_analysis.columns:
-            column_mapping['sentiment_score'] = 'avg_sentiment'
-        if 'happiness_score' in product_analysis.columns:
-            column_mapping['happiness_score'] = 'avg_happiness'
+        column_mapping = {count_col: 'question_count'}
+        if sentiment_col and sentiment_col in product_analysis.columns:
+            column_mapping[sentiment_col] = 'avg_sentiment'
+        if happiness_col and happiness_col in product_analysis.columns:
+            column_mapping[happiness_col] = 'avg_happiness'
         product_analysis = product_analysis.rename(columns=column_mapping)
         
         analysis['by_product'] = product_analysis.sort_values('question_count', ascending=False)
     
     # Segment by channel
-    if 'channel' in df.columns:
-        agg_dict = {'user_question': 'count'}
+    if 'channel' in df.columns and count_col:
+        agg_dict = {count_col: 'count'}
         
-        if 'sentiment_score' in df.columns:
-            agg_dict['sentiment_score'] = 'mean'
-        if 'happiness_score' in df.columns:
-            agg_dict['happiness_score'] = 'mean'
+        if sentiment_col:
+            agg_dict[sentiment_col] = 'mean'
+        if happiness_col:
+            agg_dict[happiness_col] = 'mean'
         
         channel_analysis = df.groupby('channel').agg(agg_dict).round(3)
         
-        column_mapping = {'user_question': 'question_count'}
-        if 'sentiment_score' in channel_analysis.columns:
-            column_mapping['sentiment_score'] = 'avg_sentiment'
-        if 'happiness_score' in channel_analysis.columns:
-            column_mapping['happiness_score'] = 'avg_happiness'
+        column_mapping = {count_col: 'question_count'}
+        if sentiment_col and sentiment_col in channel_analysis.columns:
+            column_mapping[sentiment_col] = 'avg_sentiment'
+        if happiness_col and happiness_col in channel_analysis.columns:
+            column_mapping[happiness_col] = 'avg_happiness'
         channel_analysis = channel_analysis.rename(columns=column_mapping)
         
         analysis['by_channel'] = channel_analysis.sort_values('question_count', ascending=False)
     
     # Segment by intent
-    if 'intent' in df.columns:
-        agg_dict = {'user_question': 'count'}
+    if 'intent' in df.columns and count_col:
+        agg_dict = {count_col: 'count'}
         
-        if 'sentiment_score' in df.columns:
-            agg_dict['sentiment_score'] = 'mean'
-        if 'happiness_score' in df.columns:
-            agg_dict['happiness_score'] = 'mean'
+        if sentiment_col:
+            agg_dict[sentiment_col] = 'mean'
+        if happiness_col:
+            agg_dict[happiness_col] = 'mean'
         
         intent_analysis = df.groupby('intent').agg(agg_dict).round(3)
         
@@ -935,35 +961,43 @@ def analyze_segments(df):
             product_dist = df.groupby('intent')['product_type'].apply(lambda x: x.value_counts().to_dict()).to_frame('product_distribution')
             intent_analysis = intent_analysis.join(product_dist)
         
-        column_mapping = {'user_question': 'question_count'}
-        if 'sentiment_score' in intent_analysis.columns:
-            column_mapping['sentiment_score'] = 'avg_sentiment'
-        if 'happiness_score' in intent_analysis.columns:
-            column_mapping['happiness_score'] = 'avg_happiness'
+        column_mapping = {count_col: 'question_count'}
+        if sentiment_col and sentiment_col in intent_analysis.columns:
+            column_mapping[sentiment_col] = 'avg_sentiment'
+        if happiness_col and happiness_col in intent_analysis.columns:
+            column_mapping[happiness_col] = 'avg_happiness'
         intent_analysis = intent_analysis.rename(columns=column_mapping)
         
         analysis['by_intent'] = intent_analysis.sort_values('question_count', ascending=False)
     
     # Segment by urgency
-    if 'urgency' in df.columns:
-        agg_dict = {'user_question': 'count'}
+    if 'urgency' in df.columns and count_col:
+        agg_dict = {count_col: 'count'}
         
         if 'needs_human' in df.columns:
             agg_dict['needs_human'] = 'sum'
+        if 'needs_escalation' in df.columns:
+            agg_dict['needs_escalation'] = 'sum'
         
         urgency_analysis = df.groupby('urgency').agg(agg_dict)
+        column_mapping = {count_col: 'question_count'}
+        urgency_analysis = urgency_analysis.rename(columns=column_mapping)
         analysis['by_urgency'] = urgency_analysis.sort_values('question_count', ascending=False)
     
     # Time-based segments
-    if 'date' in df.columns and df['date'].notna().any():
+    if 'date' in df.columns and df['date'].notna().any() and count_col:
         df_copy = df.copy()
         df_copy['month'] = pd.to_datetime(df_copy['date']).dt.to_period('M')
         
-        agg_dict = {'user_question': 'count'}
-        if 'sentiment_score' in df_copy.columns:
-            agg_dict['sentiment_score'] = 'mean'
+        agg_dict = {count_col: 'count'}
+        if sentiment_col:
+            agg_dict[sentiment_col] = 'mean'
         
         monthly_analysis = df_copy.groupby('month').agg(agg_dict).round(3)
+        column_mapping = {count_col: 'question_count'}
+        if sentiment_col and sentiment_col in monthly_analysis.columns:
+            column_mapping[sentiment_col] = 'avg_sentiment'
+        monthly_analysis = monthly_analysis.rename(columns=column_mapping)
         analysis['by_month'] = monthly_analysis
     
     return analysis
@@ -1572,9 +1606,13 @@ def build_sentiment_tab(df):
     
     # Statistics table
     st.subheader("Sentiment Statistics")
-    if 'sentiment_label' in df.columns and df['sentiment_label'].notna().any():
-        sentiment_stats = df.groupby('sentiment_label').agg({
-            'sentiment_score': ['mean', 'std', 'count'] if 'sentiment_score' in df.columns else 'count'
+    # Check for sentiment label column (could be frage_sentiment_label or sentiment_label)
+    sentiment_label_col = 'frage_sentiment_label' if 'frage_sentiment_label' in df.columns else ('sentiment_label' if 'sentiment_label' in df.columns else None)
+    sentiment_score_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+    
+    if sentiment_label_col and df[sentiment_label_col].notna().any() and sentiment_score_col:
+        sentiment_stats = df.groupby(sentiment_label_col).agg({
+            sentiment_score_col: ['mean', 'std', 'count']
         }).round(2)
         st.dataframe(sentiment_stats, use_container_width=True, key="sentiment_tab_stats_table")
 
@@ -1597,22 +1635,37 @@ def build_topics_tab(df):
     
     # Topic statistics
     st.subheader("Topic Statistics")
-    topic_stats = df.groupby('topic_label').agg({
-        'sentiment_score': 'mean' if 'sentiment_score' in df.columns else lambda x: 0,
-        'happiness_score': 'mean' if 'happiness_score' in df.columns else lambda x: 0,
-        'user_question': 'count'
-    }).round(2)
-    topic_stats.columns = ['Avg Sentiment', 'Avg Happiness', 'Count']
-    topic_stats = topic_stats.sort_values('Count', ascending=False)
-    st.dataframe(topic_stats, use_container_width=True, key="topic_stats_table")
+    # Use available columns (German or English format)
+    agg_dict = {}
+    count_col = 'frage' if 'frage' in df.columns else ('user_question' if 'user_question' in df.columns else None)
+    if count_col:
+        agg_dict[count_col] = 'count'
+    
+    sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+    if sentiment_col:
+        agg_dict[sentiment_col] = 'mean'
+    
+    happiness_col = 'user_happiness_score' if 'user_happiness_score' in df.columns else ('happiness_score' if 'happiness_score' in df.columns else None)
+    if happiness_col:
+        agg_dict[happiness_col] = 'mean'
+    
+    if agg_dict:
+        topic_stats = df.groupby('topic_label').agg(agg_dict).round(2)
+        topic_stats.columns = ['Avg Sentiment', 'Avg Happiness', 'Count'][:len(topic_stats.columns)]
+        topic_stats = topic_stats.sort_values(topic_stats.columns[-1], ascending=False)
+        st.dataframe(topic_stats, use_container_width=True, key="topic_stats_table")
     
     # Example questions per topic
     st.subheader("Example Questions by Topic")
     selected_topic = st.selectbox("Select a topic to view examples:", df['topic_label'].unique(), key="topic_selector")
     
-    topic_questions = df[df['topic_label'] == selected_topic]['user_question'].head(10)
-    for i, q in enumerate(topic_questions, 1):
-        st.write(f"{i}. {q[:200]}...")
+    question_col = 'frage' if 'frage' in df.columns else ('user_question' if 'user_question' in df.columns else None)
+    if question_col:
+        topic_questions = df[df['topic_label'] == selected_topic][question_col].head(10)
+        for i, q in enumerate(topic_questions, 1):
+            st.write(f"{i}. {q[:200]}...")
+    else:
+        st.warning("No question column found.")
     
     # Embedding visualizations
     st.subheader("Topic Visualization (2D Embedding Projection)")
