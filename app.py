@@ -1248,11 +1248,17 @@ def plot_happiness_by_product(df):
     return apply_dark_theme(fig)
 
 def plot_sentiment_over_time(df):
-    """Plot sentiment score over time."""
-    if df is None or df.empty or 'date' not in df.columns or 'sentiment_score' not in df.columns:
+    """Plot sentiment score over time - handles both English and German column formats."""
+    if df is None or df.empty or 'date' not in df.columns:
         return None
     
-    daily_sentiment = df.groupby('date')['sentiment_score'].mean().reset_index()
+    # Check for sentiment score in both formats
+    sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+    if not sentiment_col:
+        return None
+    
+    daily_sentiment = df.groupby('date')[sentiment_col].mean().reset_index()
+    daily_sentiment = daily_sentiment.rename(columns={sentiment_col: 'sentiment_score'})
     
     fig = px.line(
         daily_sentiment,
@@ -1282,36 +1288,47 @@ def plot_volume_over_time(df):
     return apply_dark_theme(fig)
 
 def plot_volume_by_product_over_time(df):
-    """Plot question volume by product type over time."""
+    """Plot question volume by product type/team over time - handles both English and German column formats."""
     if df is None or df.empty or 'date' not in df.columns:
         return None
     
-    daily_volume = df.groupby(['date', 'product_type']).size().reset_index(name='count')
+    # Check for product_type or team column
+    group_col = 'product_type' if 'product_type' in df.columns else ('team' if 'team' in df.columns else None)
+    if not group_col:
+        return None
+    
+    daily_volume = df.groupby(['date', group_col]).size().reset_index(name='count')
     
     fig = px.line(
         daily_volume,
         x='date',
         y='count',
-        color='product_type',
-        title="Question Volume by Product Type Over Time",
-        labels={'count': 'Number of Questions', 'date': 'Date'}
+        color=group_col,
+        title=f"Question Volume by {'Product Type' if group_col == 'product_type' else 'Team'} Over Time",
+        labels={'count': 'Number of Questions', 'date': 'Date', group_col: ('Product Type' if group_col == 'product_type' else 'Team')}
     )
     return apply_dark_theme(fig)
 
 def plot_heatmap_weekday_hour(df, metric='count'):
-    """Plot heatmap of weekday vs hour."""
+    """Plot heatmap of weekday vs hour - handles both English and German column formats."""
     if df is None or df.empty or 'weekday' not in df.columns or 'hour_of_day' not in df.columns:
         return None
     
     weekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    df['weekday'] = pd.Categorical(df['weekday'], categories=weekday_order, ordered=True)
+    df_copy = df.copy()
+    df_copy['weekday'] = pd.Categorical(df_copy['weekday'], categories=weekday_order, ordered=True)
     
     if metric == 'count':
-        heatmap_data = df.groupby(['weekday', 'hour_of_day']).size().reset_index(name='count')
+        heatmap_data = df_copy.groupby(['weekday', 'hour_of_day']).size().reset_index(name='count')
         z_values = 'count'
         title = "Question Count by Weekday and Hour"
     else:
-        heatmap_data = df.groupby(['weekday', 'hour_of_day'])['sentiment_score'].mean().reset_index()
+        # Check for sentiment score in both formats
+        sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df_copy.columns else ('sentiment_score' if 'sentiment_score' in df_copy.columns else None)
+        if not sentiment_col:
+            return None
+        
+        heatmap_data = df_copy.groupby(['weekday', 'hour_of_day'])[sentiment_col].mean().reset_index()
         heatmap_data.columns = ['weekday', 'hour_of_day', 'avg_sentiment']
         z_values = 'avg_sentiment'
         title = "Average Sentiment by Weekday and Hour"
@@ -1767,7 +1784,8 @@ def build_time_tab(df):
         return
     
     # Sentiment over time
-    if 'sentiment_score' in df.columns and df['sentiment_score'].notna().any():
+    sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+    if sentiment_col and df[sentiment_col].notna().any():
         fig = plot_sentiment_over_time(df)
         if fig:
             st.plotly_chart(fig, use_container_width=True, key="sentiment_over_time")
@@ -1791,7 +1809,8 @@ def build_time_tab(df):
             st.plotly_chart(fig, use_container_width=True, key="heatmap_count")
     
     with col2:
-        if 'sentiment_score' in df.columns and df['sentiment_score'].notna().any():
+        sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+        if sentiment_col and df[sentiment_col].notna().any():
             fig = plot_heatmap_weekday_hour(df, metric='sentiment')
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="heatmap_sentiment")
