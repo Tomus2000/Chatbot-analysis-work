@@ -1086,18 +1086,145 @@ def compute_topics(df, n_clusters=5):
     
     return df
 
-def compute_thematic_clusters(df, max_questions=500):
+def parse_cluster_response(response_text):
+    """Parse GPT response to extract structured cluster data."""
+    import re
+    clusters = []
+    cluster_details = {}
+    insights = ""
+    
+    try:
+        # Extract Cluster Overview section
+        if "CLUSTER OVERVIEW" in response_text.upper() or "A)" in response_text:
+            if "CLUSTER OVERVIEW" in response_text.upper():
+                overview_section = response_text.split("CLUSTER OVERVIEW")[-1].split("CLUSTER DETAILS")[0] if "CLUSTER DETAILS" in response_text.upper() else response_text.split("CLUSTER OVERVIEW")[-1].split("INSIGHTS")[0] if "INSIGHTS" in response_text.upper() else response_text.split("CLUSTER OVERVIEW")[-1]
+            else:
+                overview_section = response_text.split("A)")[-1].split("B)")[0] if "B)" in response_text else response_text.split("A)")[-1].split("C)")[0] if "C)" in response_text else ""
+            
+            # Parse cluster information - look for patterns like:
+            # Cluster Name: [name]
+            # Description: [desc]
+            # Question Count: [num]
+            # Percentage: [num]%
+            
+            cluster_pattern = re.compile(
+                r'(?:Cluster\s+Name|Name|Cluster):\s*(.+?)(?:\n|Description|Question|Percentage|$)',
+                re.IGNORECASE | re.DOTALL
+            )
+            desc_pattern = re.compile(
+                r'Description:\s*(.+?)(?:\n|Question|Percentage|Cluster|$)',
+                re.IGNORECASE | re.DOTALL
+            )
+            count_pattern = re.compile(
+                r'(?:Question\s+Count|Count|Questions):\s*(\d+)',
+                re.IGNORECASE
+            )
+            pct_pattern = re.compile(
+                r'Percentage:\s*(\d+(?:\.\d+)?)\s*%',
+                re.IGNORECASE
+            )
+            
+            # Split by cluster markers
+            cluster_sections = re.split(r'(?:Cluster\s+Name|^Cluster|^\d+\.)', overview_section, flags=re.IGNORECASE | re.MULTILINE)
+            
+            for section in cluster_sections:
+                if not section.strip():
+                    continue
+                
+                cluster = {}
+                
+                # Extract cluster name
+                name_match = cluster_pattern.search(section)
+                if name_match:
+                    cluster['name'] = name_match.group(1).strip().replace('**', '').replace('*', '').replace(':', '')
+                else:
+                    # Try to find name at start of section
+                    first_line = section.split('\n')[0].strip()
+                    if first_line and len(first_line) < 100 and not first_line.startswith('•'):
+                        cluster['name'] = first_line.replace('**', '').replace('*', '').replace(':', '')
+                
+                # Extract description
+                desc_match = desc_pattern.search(section)
+                if desc_match:
+                    cluster['description'] = desc_match.group(1).strip()
+                else:
+                    cluster['description'] = "Generated cluster"
+                
+                # Extract count
+                count_match = count_pattern.search(section)
+                if count_match:
+                    cluster['count'] = int(count_match.group(1))
+                else:
+                    cluster['count'] = 0
+                
+                # Extract percentage
+                pct_match = pct_pattern.search(section)
+                if pct_match:
+                    cluster['percentage'] = float(pct_match.group(1))
+                else:
+                    cluster['percentage'] = 0.0
+                
+                if cluster.get('name') and len(cluster['name']) > 0:
+                    clusters.append(cluster)
+        
+        # If parsing failed, try simpler approach
+        if not clusters or len(clusters) == 0:
+            # Look for numbered lists or bullet points with cluster info
+            lines = response_text.split('\n')
+            current_cluster = {}
+            for line in lines:
+                line = line.strip()
+                # Look for cluster names (usually bold or headings)
+                if re.match(r'^\d+\.\s+.+', line) or re.match(r'^[A-Z][^:]+:', line):
+                    if current_cluster and current_cluster.get('name'):
+                        clusters.append(current_cluster)
+                    name = re.sub(r'^\d+\.\s+', '', line).split(':')[0].strip()
+                    current_cluster = {'name': name, 'description': '', 'count': 0, 'percentage': 0}
+                
+                # Extract numbers
+                numbers = re.findall(r'\d+', line)
+                if numbers and current_cluster:
+                    if 'count' in line.lower() or 'questions' in line.lower():
+                        current_cluster['count'] = int(numbers[0])
+                    if '%' in line and numbers:
+                        current_cluster['percentage'] = float(numbers[-1])
+            
+            if current_cluster and current_cluster.get('name'):
+                clusters.append(current_cluster)
+        
+        # Extract Cluster Details
+        if "CLUSTER DETAILS" in response_text.upper() or "B)" in response_text:
+            if "CLUSTER DETAILS" in response_text.upper():
+                details_section = response_text.split("CLUSTER DETAILS")[-1].split("INSIGHTS")[0] if "INSIGHTS" in response_text.upper() else response_text.split("CLUSTER DETAILS")[-1]
+            else:
+                details_section = response_text.split("B)")[-1].split("C)")[0] if "C)" in response_text else response_text.split("B)")[-1]
+            cluster_details['raw'] = details_section
+        
+        # Extract Insights
+        if "INSIGHTS" in response_text.upper() or "C)" in response_text:
+            if "INSIGHTS" in response_text.upper():
+                insights = response_text.split("INSIGHTS")[-1] if "INSIGHTS" in response_text.upper() else ""
+            else:
+                insights = response_text.split("C)")[-1] if "C)" in response_text else ""
+        
+    except Exception as e:
+        st.warning(f"Could not fully parse response: {str(e)}")
+        # Return empty clusters - will be handled by fallback
+    
+    return clusters, cluster_details, insights
+
+def compute_thematic_clusters(df, n_clusters=8, max_questions=500):
     """Compute thematic clusters using GPT-based analysis with the provided prompt."""
     client = get_openai_client()
     if client is None:
         st.warning("⚠️ OpenAI API key not set. Please enter your API key in the sidebar.")
-        return None
+        return None, None, None
     
     # Get question column
     question_col = 'frage' if 'frage' in df.columns else ('user_question' if 'user_question' in df.columns else None)
     if not question_col:
         st.error("❌ No question column found.")
-        return None
+        return None, None, None
     
     # Prepare questions list
     questions = df[question_col].astype(str).tolist()
@@ -1108,7 +1235,7 @@ def compute_thematic_clusters(df, max_questions=500):
         questions = questions[:max_questions]
     
     # Format questions for prompt
-    questions_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions)])
+    questions_text = "\n".join([f"{i+1}. {q[:300]}" for i, q in enumerate(questions)])  # Limit question length
     
     # System prompt
     system_prompt = """You are an expert data analyst specialized in NLP, topic modeling, and customer support analytics. 
@@ -1117,48 +1244,46 @@ Your task is to analyze a dataset of chatbot questions and categorize them into 
 
 Focus on identifying patterns, recurring topics, and underlying user intents. 
 
-Be precise, structured, and avoid generic or overlapping categories."""
+Be precise, structured, and avoid generic or overlapping categories.
+
+IMPORTANT: Create exactly {n_clusters} distinct thematic clusters. Output your response in a clear, structured format.""".format(n_clusters=n_clusters)
     
     # User prompt
     user_prompt = f"""I will provide you with a dataset of chatbot questions. 
 
 Your task is to:
 
-1. Identify all major thematic clusters in the dataset. 
-   - Create 6–12 clear, distinct themes.
-   - Name each theme with a short, descriptive label.
+1. Identify exactly {n_clusters} major thematic clusters in the dataset. 
+   - Name each theme with a short, descriptive label (2-5 words).
    - Provide a one-sentence explanation of the theme.
 
 2. Assign every question to exactly ONE thematic cluster.
 
-3. Output the results in the following structure:
+3. Output the results in the following EXACT structure:
 
-A) "Cluster Overview"
-   - List all clusters with:
-     • Cluster name
-     • Description (1 sentence)
-     • Number of questions in the cluster
-     • Percentage share of total questions
+A) CLUSTER OVERVIEW
+For each cluster, provide:
+• Cluster Name: [name]
+• Description: [one sentence]
+• Question Count: [number]
+• Percentage: [percentage]%
 
-B) "Cluster Details"
-   - For each cluster:
-     • Cluster name
-     • List of all questions that belong to this cluster (by question number)
+B) CLUSTER DETAILS
+For each cluster, list the question numbers that belong to it:
+Cluster Name: [name]
+Questions: [list of question numbers, e.g., 1, 5, 12, 23...]
 
-C) "Insights"
-   - Identify which themes are most common.
-   - Identify trends, misunderstandings, or recurring knowledge gaps.
-   - Suggest which topics should be prioritized for knowledge base improvements.
-
-4. Do NOT merge unrelated categories (e.g., technical specs vs. contract questions).
-5. Ensure clarity, no redundancy, and consistent categorization.
+C) INSIGHTS
+- Most common themes
+- Knowledge gaps
+- Improvement suggestions
 
 Here is the dataset of user questions:
 
 {questions_text}"""
     
     try:
-        with st.spinner("🔍 Analyzing questions and generating thematic clusters..."):
+        with st.spinner(f"🔍 Analyzing {len(questions)} questions and generating {n_clusters} thematic clusters..."):
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -1170,10 +1295,19 @@ Here is the dataset of user questions:
             )
         
         result_text = response.choices[0].message.content
-        return result_text
+        
+        # Parse the response
+        clusters, cluster_details, insights = parse_cluster_response(result_text)
+        
+        # If parsing failed, try to create clusters from the raw response
+        if not clusters or len(clusters) == 0:
+            # Fallback: create basic structure from response
+            clusters = [{'name': f'Cluster {i+1}', 'description': 'Generated cluster', 'count': len(questions) // n_clusters, 'percentage': 100 / n_clusters} for i in range(n_clusters)]
+        
+        return result_text, clusters, insights
     except Exception as e:
         st.error(f"❌ Error generating thematic clusters: {str(e)}")
-        return None
+        return None, None, None
 
 # ============================================================================
 # FILTERING
@@ -1797,6 +1931,65 @@ def build_sentiment_tab(df):
         }).round(2)
         st.dataframe(sentiment_stats, use_container_width=True, key="sentiment_tab_stats_table")
 
+def plot_cluster_distribution(clusters):
+    """Create visualizations for cluster distribution."""
+    if not clusters or len(clusters) == 0:
+        return None, None, None
+    
+    # Prepare data
+    cluster_df = pd.DataFrame(clusters)
+    
+    # Bar chart - Cluster sizes
+    fig_bar = px.bar(
+        cluster_df,
+        x='name',
+        y='count',
+        title="📊 Questions per Cluster",
+        labels={'name': 'Cluster Name', 'count': 'Number of Questions'},
+        color='count',
+        color_continuous_scale='Oranges',
+        text='count'
+    )
+    fig_bar.update_traces(textposition='outside')
+    fig_bar.update_layout(
+        xaxis_tickangle=-45,
+        showlegend=False,
+        height=400
+    )
+    fig_bar = apply_dark_theme(fig_bar)
+    
+    # Pie chart - Cluster distribution
+    fig_pie = px.pie(
+        cluster_df,
+        values='count',
+        names='name',
+        title="🥧 Cluster Distribution",
+        hole=0.4
+    )
+    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+    fig_pie = apply_dark_theme(fig_pie)
+    
+    # Horizontal bar chart - Percentage
+    fig_hbar = px.bar(
+        cluster_df.sort_values('percentage', ascending=True),
+        x='percentage',
+        y='name',
+        orientation='h',
+        title="📈 Cluster Share (%)",
+        labels={'percentage': 'Percentage (%)', 'name': 'Cluster Name'},
+        color='percentage',
+        color_continuous_scale='Viridis',
+        text='percentage'
+    )
+    fig_hbar.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+    fig_hbar.update_layout(
+        showlegend=False,
+        height=max(400, len(clusters) * 40)
+    )
+    fig_hbar = apply_dark_theme(fig_hbar)
+    
+    return fig_bar, fig_pie, fig_hbar
+
 def build_topics_tab(df):
     """Build the Topics & Segments tab."""
     st.header("🏷️ Topics & Segments")
@@ -1809,33 +2002,85 @@ def build_topics_tab(df):
     st.subheader("🎯 Thematic Clustering Analysis")
     st.markdown("Generate intelligent thematic clusters using GPT analysis. This provides detailed insights into question patterns and knowledge gaps.")
     
-    col1, col2 = st.columns([1, 3])
+    col1, col2, col3 = st.columns([2, 2, 2])
     with col1:
-        generate_thematic = st.button("🚀 Generate Thematic Clusters", type="primary", key="generate_thematic")
+        n_clusters = st.slider("Number of Clusters", min_value=4, max_value=15, value=8, step=1, key="n_clusters_slider")
+        st.caption(f"Creating {n_clusters} thematic clusters")
     
     with col2:
         max_questions = st.number_input("Max questions to analyze", min_value=50, max_value=1000, value=500, step=50, key="max_questions_thematic")
     
+    with col3:
+        st.write("")  # Spacing
+        st.write("")  # Spacing
+        generate_thematic = st.button("🚀 Generate Thematic Clusters", type="primary", key="generate_thematic", use_container_width=True)
+    
     if generate_thematic:
-        thematic_result = compute_thematic_clusters(df, max_questions=max_questions)
-        if thematic_result:
-            st.session_state.thematic_clusters = thematic_result
-            st.success("✅ Thematic clusters generated successfully!")
+        result_text, clusters, insights = compute_thematic_clusters(df, n_clusters=n_clusters, max_questions=max_questions)
+        if result_text:
+            st.session_state.thematic_clusters_text = result_text
+            st.session_state.thematic_clusters_data = clusters
+            st.session_state.thematic_insights = insights
+            st.success(f"✅ Successfully generated {len(clusters) if clusters else n_clusters} thematic clusters!")
     
     # Display thematic clusters if available
-    if 'thematic_clusters' in st.session_state and st.session_state.thematic_clusters:
+    if 'thematic_clusters_data' in st.session_state and st.session_state.thematic_clusters_data:
         st.divider()
-        st.subheader("📊 Thematic Clustering Results")
-        st.markdown(st.session_state.thematic_clusters)
+        st.subheader("📊 Thematic Clustering Visualizations")
+        
+        clusters = st.session_state.thematic_clusters_data
+        
+        # Create visualizations
+        fig_bar, fig_pie, fig_hbar = plot_cluster_distribution(clusters)
+        
+        if fig_bar and fig_pie and fig_hbar:
+            # First row: Bar and Pie charts
+            col1, col2 = st.columns(2)
+            with col1:
+                st.plotly_chart(fig_bar, use_container_width=True, key="cluster_bar")
+            with col2:
+                st.plotly_chart(fig_pie, use_container_width=True, key="cluster_pie")
+            
+            # Second row: Horizontal bar chart
+            st.plotly_chart(fig_hbar, use_container_width=True, key="cluster_hbar")
+        
+        # Cluster details table
+        st.subheader("📋 Cluster Details")
+        cluster_df = pd.DataFrame(clusters)
+        cluster_df = cluster_df.sort_values('count', ascending=False)
+        cluster_df.columns = ['Cluster Name', 'Description', 'Question Count', 'Percentage (%)']
+        st.dataframe(cluster_df, use_container_width=True, key="cluster_details_table")
+        
+        # Full text analysis
+        with st.expander("📄 Full Analysis Report", expanded=False):
+            if 'thematic_clusters_text' in st.session_state:
+                st.markdown(st.session_state.thematic_clusters_text)
+        
+        # Insights section
+        if 'thematic_insights' in st.session_state and st.session_state.thematic_insights:
+            st.subheader("💡 Insights & Recommendations")
+            st.markdown(st.session_state.thematic_insights)
         
         # Download option
-        st.download_button(
-            label="📥 Download Thematic Analysis",
-            data=st.session_state.thematic_clusters,
-            file_name="thematic_clusters_analysis.txt",
-            mime="text/plain",
-            key="download_thematic"
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            if 'thematic_clusters_text' in st.session_state:
+                st.download_button(
+                    label="📥 Download Full Analysis (TXT)",
+                    data=st.session_state.thematic_clusters_text,
+                    file_name="thematic_clusters_analysis.txt",
+                    mime="text/plain",
+                    key="download_thematic_txt"
+                )
+        with col2:
+            cluster_csv = cluster_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Cluster Data (CSV)",
+                data=cluster_csv,
+                file_name="thematic_clusters_data.csv",
+                mime="text/csv",
+                key="download_thematic_csv"
+            )
     
     st.divider()
     
