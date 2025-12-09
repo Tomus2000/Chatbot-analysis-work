@@ -2004,16 +2004,24 @@ def build_topics_tab(df):
     
     col1, col2, col3 = st.columns([2, 2, 2])
     with col1:
-        n_clusters = st.slider("Number of Clusters", min_value=4, max_value=15, value=8, step=1, key="n_clusters_slider")
+        # Initialize in session state if not exists
+        if 'thematic_n_clusters' not in st.session_state:
+            st.session_state.thematic_n_clusters = 8
+        n_clusters = st.slider("Number of Clusters", min_value=4, max_value=15, value=st.session_state.thematic_n_clusters, step=1, key="thematic_n_clusters_slider_unique")
+        st.session_state.thematic_n_clusters = n_clusters
         st.caption(f"Creating {n_clusters} thematic clusters")
     
     with col2:
-        max_questions = st.number_input("Max questions to analyze", min_value=50, max_value=1000, value=500, step=50, key="max_questions_thematic")
+        # Initialize in session state if not exists
+        if 'thematic_max_questions' not in st.session_state:
+            st.session_state.thematic_max_questions = 500
+        max_questions = st.number_input("Max questions to analyze", min_value=50, max_value=1000, value=st.session_state.thematic_max_questions, step=50, key="thematic_max_questions_input_unique")
+        st.session_state.thematic_max_questions = max_questions
     
     with col3:
         st.write("")  # Spacing
         st.write("")  # Spacing
-        generate_thematic = st.button("🚀 Generate Thematic Clusters", type="primary", key="generate_thematic", use_container_width=True)
+        generate_thematic = st.button("🚀 Generate Thematic Clusters", type="primary", key="thematic_generate_button_unique", use_container_width=True)
     
     if generate_thematic:
         result_text, clusters, insights = compute_thematic_clusters(df, n_clusters=n_clusters, max_questions=max_questions)
@@ -2037,19 +2045,19 @@ def build_topics_tab(df):
             # First row: Bar and Pie charts
             col1, col2 = st.columns(2)
             with col1:
-                st.plotly_chart(fig_bar, use_container_width=True, key="cluster_bar")
+                st.plotly_chart(fig_bar, use_container_width=True, key="thematic_cluster_bar")
             with col2:
-                st.plotly_chart(fig_pie, use_container_width=True, key="cluster_pie")
+                st.plotly_chart(fig_pie, use_container_width=True, key="thematic_cluster_pie")
             
             # Second row: Horizontal bar chart
-            st.plotly_chart(fig_hbar, use_container_width=True, key="cluster_hbar")
+            st.plotly_chart(fig_hbar, use_container_width=True, key="thematic_cluster_hbar")
         
         # Cluster details table
         st.subheader("📋 Cluster Details")
         cluster_df = pd.DataFrame(clusters)
         cluster_df = cluster_df.sort_values('count', ascending=False)
         cluster_df.columns = ['Cluster Name', 'Description', 'Question Count', 'Percentage (%)']
-        st.dataframe(cluster_df, use_container_width=True, key="cluster_details_table")
+        st.dataframe(cluster_df, use_container_width=True, key="thematic_cluster_details_table")
         
         # Full text analysis
         with st.expander("📄 Full Analysis Report", expanded=False):
@@ -3304,7 +3312,7 @@ def main():
             max_value=20,
             value=12,
             help="Anzahl der zu identifizierenden Themen",
-            key="n_clusters_slider"
+            key="sidebar_n_clusters_slider"
         )
         
         st.divider()
