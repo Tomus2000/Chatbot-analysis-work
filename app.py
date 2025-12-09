@@ -1334,12 +1334,19 @@ def plot_topic_distribution(df):
     
     topic_counts = df['topic_label'].value_counts()
     
+    # Create a DataFrame for plotly express
+    topic_df = pd.DataFrame({
+        'Topic': topic_counts.index,
+        'Count': topic_counts.values
+    })
+    
     fig = px.bar(
-        x=topic_counts.values,
-        y=topic_counts.index,
+        topic_df,
+        x='Count',
+        y='Topic',
         orientation='h',
         title="Questions per Topic",
-        labels={'x': 'Count', 'y': 'Topic'},
+        labels={'Count': 'Count', 'Topic': 'Topic'},
         color_discrete_sequence=['#FF6B35']
     )
     fig.update_layout(yaxis={'categoryorder': 'total ascending'})
