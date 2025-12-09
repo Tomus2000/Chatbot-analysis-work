@@ -1086,6 +1086,95 @@ def compute_topics(df, n_clusters=5):
     
     return df
 
+def compute_thematic_clusters(df, max_questions=500):
+    """Compute thematic clusters using GPT-based analysis with the provided prompt."""
+    client = get_openai_client()
+    if client is None:
+        st.warning("⚠️ OpenAI API key not set. Please enter your API key in the sidebar.")
+        return None
+    
+    # Get question column
+    question_col = 'frage' if 'frage' in df.columns else ('user_question' if 'user_question' in df.columns else None)
+    if not question_col:
+        st.error("❌ No question column found.")
+        return None
+    
+    # Prepare questions list
+    questions = df[question_col].astype(str).tolist()
+    
+    # Limit questions if too many (to avoid token limits)
+    if len(questions) > max_questions:
+        st.warning(f"⚠️ Limiting analysis to first {max_questions} questions (out of {len(questions)}) to avoid token limits.")
+        questions = questions[:max_questions]
+    
+    # Format questions for prompt
+    questions_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions)])
+    
+    # System prompt
+    system_prompt = """You are an expert data analyst specialized in NLP, topic modeling, and customer support analytics. 
+
+Your task is to analyze a dataset of chatbot questions and categorize them into clear thematic clusters. 
+
+Focus on identifying patterns, recurring topics, and underlying user intents. 
+
+Be precise, structured, and avoid generic or overlapping categories."""
+    
+    # User prompt
+    user_prompt = f"""I will provide you with a dataset of chatbot questions. 
+
+Your task is to:
+
+1. Identify all major thematic clusters in the dataset. 
+   - Create 6–12 clear, distinct themes.
+   - Name each theme with a short, descriptive label.
+   - Provide a one-sentence explanation of the theme.
+
+2. Assign every question to exactly ONE thematic cluster.
+
+3. Output the results in the following structure:
+
+A) "Cluster Overview"
+   - List all clusters with:
+     • Cluster name
+     • Description (1 sentence)
+     • Number of questions in the cluster
+     • Percentage share of total questions
+
+B) "Cluster Details"
+   - For each cluster:
+     • Cluster name
+     • List of all questions that belong to this cluster (by question number)
+
+C) "Insights"
+   - Identify which themes are most common.
+   - Identify trends, misunderstandings, or recurring knowledge gaps.
+   - Suggest which topics should be prioritized for knowledge base improvements.
+
+4. Do NOT merge unrelated categories (e.g., technical specs vs. contract questions).
+5. Ensure clarity, no redundancy, and consistent categorization.
+
+Here is the dataset of user questions:
+
+{questions_text}"""
+    
+    try:
+        with st.spinner("🔍 Analyzing questions and generating thematic clusters..."):
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=4000
+            )
+        
+        result_text = response.choices[0].message.content
+        return result_text
+    except Exception as e:
+        st.error(f"❌ Error generating thematic clusters: {str(e)}")
+        return None
+
 # ============================================================================
 # FILTERING
 # ============================================================================
@@ -1716,6 +1805,43 @@ def build_topics_tab(df):
         st.warning("No data available.")
         return
     
+    # Add thematic clustering option
+    st.subheader("🎯 Thematic Clustering Analysis")
+    st.markdown("Generate intelligent thematic clusters using GPT analysis. This provides detailed insights into question patterns and knowledge gaps.")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        generate_thematic = st.button("🚀 Generate Thematic Clusters", type="primary", key="generate_thematic")
+    
+    with col2:
+        max_questions = st.number_input("Max questions to analyze", min_value=50, max_value=1000, value=500, step=50, key="max_questions_thematic")
+    
+    if generate_thematic:
+        thematic_result = compute_thematic_clusters(df, max_questions=max_questions)
+        if thematic_result:
+            st.session_state.thematic_clusters = thematic_result
+            st.success("✅ Thematic clusters generated successfully!")
+    
+    # Display thematic clusters if available
+    if 'thematic_clusters' in st.session_state and st.session_state.thematic_clusters:
+        st.divider()
+        st.subheader("📊 Thematic Clustering Results")
+        st.markdown(st.session_state.thematic_clusters)
+        
+        # Download option
+        st.download_button(
+            label="📥 Download Thematic Analysis",
+            data=st.session_state.thematic_clusters,
+            file_name="thematic_clusters_analysis.txt",
+            mime="text/plain",
+            key="download_thematic"
+        )
+    
+    st.divider()
+    
+    # Existing topic analysis (embedding-based)
+    st.subheader("📈 Embedding-Based Topic Clustering")
+    
     if 'topic_label' not in df.columns:
         st.info("Topics have not been computed yet. Use the sidebar to compute topics.")
         return
@@ -1814,6 +1940,256 @@ def build_time_tab(df):
             fig = plot_heatmap_weekday_hour(df, metric='sentiment')
             if fig:
                 st.plotly_chart(fig, use_container_width=True, key="heatmap_sentiment")
+
+def build_teams_tab(df):
+    """Build the Teams & Performance tab."""
+    st.header("👥 Teams & Performance")
+    
+    if df is None or df.empty:
+        st.warning("No data available.")
+        return
+    
+    # Check if team column exists
+    if 'team' not in df.columns:
+        st.info("No team data available in the dataset.")
+        return
+    
+    # Team performance metrics
+    st.subheader("Team Performance Overview")
+    
+    # Calculate team statistics
+    team_stats = []
+    count_col = 'frage' if 'frage' in df.columns else ('user_question' if 'user_question' in df.columns else None)
+    sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+    happiness_col = 'user_happiness_score' if 'user_happiness_score' in df.columns else ('happiness_score' if 'happiness_score' in df.columns else None)
+    antwort_col = 'antwort_gefunden_bool' if 'antwort_gefunden_bool' in df.columns else ('antwort_gefunden' if 'antwort_gefunden' in df.columns else None)
+    
+    if count_col:
+        agg_dict = {count_col: 'count'}
+        if sentiment_col:
+            agg_dict[sentiment_col] = 'mean'
+        if happiness_col:
+            agg_dict[happiness_col] = 'mean'
+        if antwort_col:
+            agg_dict[antwort_col] = lambda x: (x == True).sum() if antwort_col == 'antwort_gefunden_bool' else (x.str.lower().isin(['ja', 'yes', 'true', '1']).sum())
+        
+        team_stats_df = df.groupby('team').agg(agg_dict).round(3)
+        team_stats_df.columns = ['Question Count', 'Avg Sentiment', 'Avg Happiness', 'Answers Found'][:len(team_stats_df.columns)]
+        team_stats_df = team_stats_df.sort_values('Question Count', ascending=False)
+        
+        st.dataframe(team_stats_df, use_container_width=True, key="team_stats_table")
+    
+    # Team comparison charts
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Questions by Team")
+        team_counts = df['team'].value_counts().head(15)  # Top 15 teams
+        team_df = pd.DataFrame({
+            'Team': team_counts.index,
+            'Count': team_counts.values
+        })
+        fig = px.bar(
+            team_df,
+            x='Count',
+            y='Team',
+            orientation='h',
+            title="Question Volume by Team",
+            labels={'Count': 'Number of Questions', 'Team': 'Team'},
+            color_discrete_sequence=['#FF6B35']
+        )
+        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+        fig = apply_dark_theme(fig)
+        st.plotly_chart(fig, use_container_width=True, key="team_volume_chart")
+    
+    with col2:
+        if sentiment_col and df[sentiment_col].notna().any():
+            st.subheader("Average Sentiment by Team")
+            team_sentiment = df.groupby('team')[sentiment_col].mean().sort_values(ascending=False).head(15)
+            team_sentiment_df = pd.DataFrame({
+                'Team': team_sentiment.index,
+                'Avg Sentiment': team_sentiment.values
+            })
+            fig = px.bar(
+                team_sentiment_df,
+                x='Avg Sentiment',
+                y='Team',
+                orientation='h',
+                title="Average Sentiment by Team",
+                labels={'Avg Sentiment': 'Average Sentiment Score', 'Team': 'Team'},
+                color='Avg Sentiment',
+                color_continuous_scale='RdYlGn'
+            )
+            fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+            fig = apply_dark_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="team_sentiment_chart")
+        else:
+            st.info("No sentiment data available for team comparison.")
+    
+    # Answer found rate by team
+    if antwort_col:
+        st.subheader("Answer Found Rate by Team")
+        if antwort_col == 'antwort_gefunden_bool':
+            team_answer_rate = df.groupby('team').agg({
+                antwort_col: ['sum', 'count']
+            })
+            team_answer_rate['rate'] = (team_answer_rate[(antwort_col, 'sum')] / team_answer_rate[(antwort_col, 'count')] * 100).round(1)
+        else:
+            team_answer_rate = df.groupby('team')[antwort_col].apply(
+                lambda x: (x.astype(str).str.lower().isin(['ja', 'yes', 'true', '1']).sum() / len(x) * 100)
+            ).round(1)
+        
+        if isinstance(team_answer_rate, pd.Series):
+            team_answer_df = pd.DataFrame({
+                'Team': team_answer_rate.index,
+                'Answer Found Rate (%)': team_answer_rate.values
+            })
+        else:
+            team_answer_df = pd.DataFrame({
+                'Team': team_answer_rate.index,
+                'Answer Found Rate (%)': team_answer_rate['rate'].values
+            })
+        
+        team_answer_df = team_answer_df.sort_values('Answer Found Rate (%)', ascending=False).head(15)
+        
+        fig = px.bar(
+            team_answer_df,
+            x='Answer Found Rate (%)',
+            y='Team',
+            orientation='h',
+            title="Answer Found Rate by Team",
+            labels={'Answer Found Rate (%)': 'Answer Found Rate (%)', 'Team': 'Team'},
+            color='Answer Found Rate (%)',
+            color_continuous_scale='Greens'
+        )
+        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+        fig = apply_dark_theme(fig)
+        st.plotly_chart(fig, use_container_width=True, key="team_answer_rate_chart")
+
+def build_raw_tab(df):
+    """Build the Raw Data & Export tab."""
+    st.header("📋 Rohdaten & Export")
+    
+    if df is None or df.empty:
+        st.warning("No data available.")
+        return
+    
+    # Filter options for tables
+    table_type = st.selectbox(
+        "Select table view:",
+        ["All Data", "Worst Conversations", "Best Conversations", "Top Topics"],
+        key="raw_table_type_selector"
+    )
+    
+    if table_type == "All Data":
+        st.subheader("All Conversations")
+        # Remove embedding column for display (too large)
+        display_df = df.drop(columns=['embedding'], errors='ignore')
+        st.dataframe(display_df, use_container_width=True, height=400, key="raw_table_all_data")
+    
+    elif table_type == "Worst Conversations":
+        st.subheader("Conversations with Lowest Sentiment/Happiness")
+        # Use available sentiment columns (German format uses different column names)
+        sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+        if sentiment_col:
+            worst_df = df.nsmallest(20, sentiment_col, keep='all')
+        else:
+            worst_df = df.head(20)
+        
+        # Select available columns
+        available_cols = []
+        for col in ['conversation_id', 'row_id', 'gefragt_am', 'timestamp', 'frage', 'user_question', 'antwort', 'bot_answer', 
+                   'frage_sentiment_score', 'sentiment_score', 'user_happiness_label', 'user_happiness', 'team']:
+            if col in worst_df.columns:
+                available_cols.append(col)
+        
+        display_df = worst_df[available_cols].drop(columns=['embedding'], errors='ignore')
+        st.dataframe(display_df, use_container_width=True, key="raw_table_worst")
+    
+    elif table_type == "Best Conversations":
+        st.subheader("Conversations with Highest Sentiment/Happiness")
+        # Use available sentiment columns (German format uses different column names)
+        sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+        if sentiment_col:
+            best_df = df.nlargest(20, sentiment_col, keep='all')
+        else:
+            best_df = df.head(20)
+        
+        # Select available columns
+        available_cols = []
+        for col in ['conversation_id', 'row_id', 'gefragt_am', 'timestamp', 'frage', 'user_question', 'antwort', 'bot_answer',
+                   'frage_sentiment_score', 'sentiment_score', 'user_happiness_label', 'user_happiness', 'team']:
+            if col in best_df.columns:
+                available_cols.append(col)
+        
+        display_df = best_df[available_cols].drop(columns=['embedding'], errors='ignore')
+        st.dataframe(display_df, use_container_width=True, key="raw_table_best")
+    
+    elif table_type == "Top Topics":
+        if 'topic_label' in df.columns:
+            st.subheader("Topic Summary")
+            # Use available columns for aggregation
+            agg_dict = {}
+            count_col = 'frage' if 'frage' in df.columns else ('user_question' if 'user_question' in df.columns else None)
+            if count_col:
+                agg_dict[count_col] = 'count'
+            
+            sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+            if sentiment_col:
+                agg_dict[sentiment_col] = 'mean'
+            
+            happiness_col = 'user_happiness_score' if 'user_happiness_score' in df.columns else ('happiness_score' if 'happiness_score' in df.columns else None)
+            if happiness_col:
+                agg_dict[happiness_col] = 'mean'
+            
+            if agg_dict:
+                topic_summary = df.groupby('topic_label').agg(agg_dict).round(2)
+                topic_summary.columns = ['Count', 'Avg Sentiment', 'Avg Happiness'][:len(topic_summary.columns)]
+                topic_summary = topic_summary.sort_values(topic_summary.columns[0], ascending=False)
+                st.dataframe(topic_summary, use_container_width=True, key="raw_table_topics")
+            else:
+                st.info("No data available for topic summary.")
+        else:
+            st.info("Topics not computed yet.")
+    
+    # Export functionality
+    st.divider()
+    st.subheader("Export Data")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Remove embedding column for export (too large for CSV)
+        export_df = df.drop(columns=['embedding'], errors='ignore')
+        csv = export_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download as CSV",
+            data=csv,
+            file_name="chatbot_analysis.csv",
+            mime="text/csv",
+            key="download_csv_raw"
+        )
+    
+    with col2:
+        # Excel export
+        try:
+            output = io.BytesIO()
+            export_df = df.drop(columns=['embedding'], errors='ignore')
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                export_df.to_excel(writer, index=False, sheet_name='Data')
+            excel_data = output.getvalue()
+            st.download_button(
+                label="📥 Download as Excel",
+                data=excel_data,
+                file_name="chatbot_analysis.xlsx",
+                mime="application/vnd.openpyxl-officedocument.spreadsheetml.sheet",
+                key="download_excel_raw"
+            )
+        except Exception as e:
+            st.error(f"Error creating Excel file: {str(e)}")
+    
+    with col3:
+        st.info("💡 Export includes all analyzed data with sentiment, happiness, and topic information.")
 
 def build_tables_tab(df):
     """Build the Tables / Raw Data tab."""
