@@ -20,6 +20,7 @@ import re
 import json
 from collections import Counter
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 warnings.filterwarnings('ignore')
 
 # Email functionality (placeholder - will be configured later)
@@ -229,6 +230,15 @@ def preprocess_data(df):
     
     # Create row ID
     df['row_id'] = range(len(df))
+    
+    # Create conversation_id if it doesn't exist (use row_id as fallback)
+    if 'conversation_id' not in df.columns:
+        # Try to create from combination of fields, or use row_id
+        if 'gefragt_am' in df.columns and 'frage' in df.columns:
+            # Create a simple conversation_id based on row_id
+            df['conversation_id'] = df['row_id'].apply(lambda x: f"conv_{x}")
+        else:
+            df['conversation_id'] = df['row_id'].apply(lambda x: f"conv_{x}")
     
     return df
 
@@ -568,8 +578,37 @@ def get_embeddings_openai(client, texts, batch_size=100):
     
     return embeddings
 
+def _process_sentiment_batch(args):
+    """Helper function for parallel sentiment processing."""
+    client, text, field_name, idx_tuple = args
+    try:
+        result = analyze_sentiment_field_openai(client, text, field_name)
+        return (idx_tuple, result)
+    except Exception as e:
+        return (idx_tuple, {"label": "neutral", "score": 0.0})
+
+def _process_happiness_batch(args):
+    """Helper function for parallel happiness processing."""
+    client, frage, antwort, antwort_gefunden, feedback, feedback_typ, idx = args
+    try:
+        return (idx, analyze_user_happiness_comprehensive_openai(
+            client, frage, antwort, antwort_gefunden, feedback, feedback_typ
+        ))
+    except Exception as e:
+        return (idx, {"label": "neutral", "score": 0.5, "is_unhappy": False})
+
+def _process_resolution_batch(args):
+    """Helper function for parallel resolution processing."""
+    client, frage, antwort, antwort_gefunden, feedback, idx = args
+    try:
+        return (idx, analyze_resolution_status_openai(
+            client, frage, antwort, antwort_gefunden, feedback
+        ))
+    except Exception as e:
+        return (idx, {"resolution_status": "unclear", "complexity_level": "low", "needs_escalation": False})
+
 def enrich_data_with_openai(df, recompute_all=False):
-    """Enrich DataFrame with comprehensive OpenAI analysis for German format."""
+    """Enrich DataFrame with comprehensive OpenAI analysis for German format - OPTIMIZED with parallel processing."""
     client = get_openai_client()
     if client is None:
         st.warning("⚠️ OpenAI API-Schlüssel nicht gesetzt. Bitte geben Sie Ihren API-Schlüssel in der Sidebar ein.")
@@ -577,46 +616,70 @@ def enrich_data_with_openai(df, recompute_all=False):
     
     df = df.copy()
     total_rows = len(df)
+    max_workers = 10  # Number of parallel API calls
     
     # 1. Sentiment analysis for Frage, Antwort, and Feedback separately
     if recompute_all or df['frage_sentiment_label'].isna().any():
         st.info(f"📊 Analysiere Sentiment für Frage, Antwort und Feedback ({total_rows} Zeilen)...")
         progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Prepare tasks for parallel processing
+        tasks = []
+        indices = []
         
         for idx, (i, row) in enumerate(df.iterrows()):
             if recompute_all or pd.isna(df.at[i, 'frage_sentiment_label']):
-                # Frage sentiment
                 frage_text = str(row.get('frage', ''))
                 if frage_text:
-                    result = analyze_sentiment_field_openai(client, frage_text, "Frage")
-                    df.at[i, 'frage_sentiment_label'] = result['label']
-                    df.at[i, 'frage_sentiment_score'] = result['score']
+                    tasks.append((client, frage_text, "Frage", (i, 'frage')))
+                    indices.append((i, 'frage'))
             
             if recompute_all or pd.isna(df.at[i, 'antwort_sentiment_label']):
-                # Antwort sentiment
                 antwort_text = str(row.get('antwort', ''))
                 if antwort_text:
-                    result = analyze_sentiment_field_openai(client, antwort_text, "Antwort")
-                    df.at[i, 'antwort_sentiment_label'] = result['label']
-                    df.at[i, 'antwort_sentiment_score'] = result['score']
+                    tasks.append((client, antwort_text, "Antwort", (i, 'antwort')))
+                    indices.append((i, 'antwort'))
             
             if recompute_all or pd.isna(df.at[i, 'feedback_sentiment_label']):
-                # Feedback sentiment (only if feedback exists)
                 feedback_text = str(row.get('feedback', ''))
                 if feedback_text and feedback_text.strip():
-                    result = analyze_sentiment_field_openai(client, feedback_text, "Feedback")
-                    df.at[i, 'feedback_sentiment_label'] = result['label']
-                    df.at[i, 'feedback_sentiment_score'] = result['score']
-            
-            progress_bar.progress((idx + 1) / total_rows)
+                    tasks.append((client, feedback_text, "Feedback", (i, 'feedback')))
+                    indices.append((i, 'feedback'))
+        
+        # Process in parallel
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_task = {executor.submit(_process_sentiment_batch, task): task for task in tasks}
+            for future in as_completed(future_to_task):
+                try:
+                    (i, field_type), result = future.result()
+                    if field_type == 'frage':
+                        df.at[i, 'frage_sentiment_label'] = result['label']
+                        df.at[i, 'frage_sentiment_score'] = result['score']
+                    elif field_type == 'antwort':
+                        df.at[i, 'antwort_sentiment_label'] = result['label']
+                        df.at[i, 'antwort_sentiment_score'] = result['score']
+                    elif field_type == 'feedback':
+                        df.at[i, 'feedback_sentiment_label'] = result['label']
+                        df.at[i, 'feedback_sentiment_score'] = result['score']
+                    completed += 1
+                    progress_bar.progress(completed / len(tasks) if tasks else 1.0)
+                    status_text.text(f"Verarbeitet: {completed}/{len(tasks)}")
+                except Exception as e:
+                    st.warning(f"Fehler bei paralleler Verarbeitung: {str(e)}")
         
         progress_bar.empty()
+        status_text.empty()
     
     # 2. User happiness analysis (comprehensive)
     if recompute_all or df['user_happiness_label'].isna().any():
         st.info(f"😊 Analysiere Benutzerzufriedenheit ({total_rows} Zeilen)...")
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
+        tasks = []
+        indices = []
         for idx, (i, row) in enumerate(df.iterrows()):
             if recompute_all or pd.isna(df.at[i, 'user_happiness_label']):
                 frage = str(row.get('frage', ''))
@@ -624,40 +687,61 @@ def enrich_data_with_openai(df, recompute_all=False):
                 antwort_gefunden = str(row.get('antwort_gefunden', ''))
                 feedback = str(row.get('feedback', ''))
                 feedback_typ = str(row.get('feedback_typ', ''))
-                
-                result = analyze_user_happiness_comprehensive_openai(
-                    client, frage, antwort, antwort_gefunden, feedback, feedback_typ
-                )
-                df.at[i, 'user_happiness_label'] = result['label']
-                df.at[i, 'user_happiness_score'] = result['score']
-                df.at[i, 'is_unhappy'] = result['is_unhappy']
-            
-            progress_bar.progress((idx + 1) / total_rows)
+                tasks.append((client, frage, antwort, antwort_gefunden, feedback, feedback_typ, i))
+                indices.append(i)
+        
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_task = {executor.submit(_process_happiness_batch, task): task for task in tasks}
+            for future in as_completed(future_to_task):
+                try:
+                    i, result = future.result()
+                    df.at[i, 'user_happiness_label'] = result['label']
+                    df.at[i, 'user_happiness_score'] = result['score']
+                    df.at[i, 'is_unhappy'] = result['is_unhappy']
+                    completed += 1
+                    progress_bar.progress(completed / len(tasks) if tasks else 1.0)
+                    status_text.text(f"Verarbeitet: {completed}/{len(tasks)}")
+                except Exception as e:
+                    st.warning(f"Fehler bei paralleler Verarbeitung: {str(e)}")
         
         progress_bar.empty()
+        status_text.empty()
     
     # 3. Resolution status, complexity, and escalation
     if recompute_all or df['resolution_status'].isna().any():
         st.info(f"🔍 Analysiere Resolution Status und Komplexität ({total_rows} Zeilen)...")
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
+        tasks = []
+        indices = []
         for idx, (i, row) in enumerate(df.iterrows()):
             if recompute_all or pd.isna(df.at[i, 'resolution_status']):
                 frage = str(row.get('frage', ''))
                 antwort = str(row.get('antwort', ''))
                 antwort_gefunden = str(row.get('antwort_gefunden', ''))
                 feedback = str(row.get('feedback', ''))
-                
-                result = analyze_resolution_status_openai(
-                    client, frage, antwort, antwort_gefunden, feedback
-                )
-                df.at[i, 'resolution_status'] = result['resolution_status']
-                df.at[i, 'complexity_level'] = result['complexity_level']
-                df.at[i, 'needs_escalation'] = result['needs_escalation']
-            
-            progress_bar.progress((idx + 1) / total_rows)
+                tasks.append((client, frage, antwort, antwort_gefunden, feedback, i))
+                indices.append(i)
+        
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_task = {executor.submit(_process_resolution_batch, task): task for task in tasks}
+            for future in as_completed(future_to_task):
+                try:
+                    i, result = future.result()
+                    df.at[i, 'resolution_status'] = result['resolution_status']
+                    df.at[i, 'complexity_level'] = result['complexity_level']
+                    df.at[i, 'needs_escalation'] = result['needs_escalation']
+                    completed += 1
+                    progress_bar.progress(completed / len(tasks) if tasks else 1.0)
+                    status_text.text(f"Verarbeitet: {completed}/{len(tasks)}")
+                except Exception as e:
+                    st.warning(f"Fehler bei paralleler Verarbeitung: {str(e)}")
         
         progress_bar.empty()
+        status_text.empty()
     
     return df
 
@@ -1281,7 +1365,10 @@ def build_overview_tab(df):
         st.metric("Total Conversations", len(df))
     
     with col2:
-        st.metric("Unique Conversation IDs", df['conversation_id'].nunique())
+        if 'conversation_id' in df.columns:
+            st.metric("Unique Conversation IDs", df['conversation_id'].nunique())
+        else:
+            st.metric("Unique Conversation IDs", len(df))
     
     with col3:
         if 'sentiment_score' in df.columns and df['sentiment_score'].notna().any():
@@ -1604,27 +1691,66 @@ def build_tables_tab(df):
     
     elif table_type == "Worst Conversations":
         st.subheader("Conversations with Lowest Sentiment/Happiness")
-        worst_df = df.nsmallest(20, 'sentiment_score', keep='all') if 'sentiment_score' in df.columns else df.head(20)
-        display_df = worst_df[['conversation_id', 'timestamp', 'product_type', 'user_question', 'sentiment_score', 'user_happiness']].drop(columns=['embedding'], errors='ignore')
+        # Use available sentiment columns (German format uses different column names)
+        sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+        if sentiment_col:
+            worst_df = df.nsmallest(20, sentiment_col, keep='all')
+        else:
+            worst_df = df.head(20)
+        
+        # Select available columns
+        available_cols = []
+        for col in ['conversation_id', 'row_id', 'gefragt_am', 'timestamp', 'frage', 'user_question', 'antwort', 'bot_answer', 
+                   'frage_sentiment_score', 'sentiment_score', 'user_happiness_label', 'user_happiness', 'team']:
+            if col in worst_df.columns:
+                available_cols.append(col)
+        
+        display_df = worst_df[available_cols].drop(columns=['embedding'], errors='ignore')
         st.dataframe(display_df, use_container_width=True, key="table_worst")
     
     elif table_type == "Best Conversations":
         st.subheader("Conversations with Highest Sentiment/Happiness")
-        best_df = df.nlargest(20, 'sentiment_score', keep='all') if 'sentiment_score' in df.columns else df.head(20)
-        display_df = best_df[['conversation_id', 'timestamp', 'product_type', 'user_question', 'sentiment_score', 'user_happiness']].drop(columns=['embedding'], errors='ignore')
+        # Use available sentiment columns (German format uses different column names)
+        sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+        if sentiment_col:
+            best_df = df.nlargest(20, sentiment_col, keep='all')
+        else:
+            best_df = df.head(20)
+        
+        # Select available columns
+        available_cols = []
+        for col in ['conversation_id', 'row_id', 'gefragt_am', 'timestamp', 'frage', 'user_question', 'antwort', 'bot_answer',
+                   'frage_sentiment_score', 'sentiment_score', 'user_happiness_label', 'user_happiness', 'team']:
+            if col in best_df.columns:
+                available_cols.append(col)
+        
+        display_df = best_df[available_cols].drop(columns=['embedding'], errors='ignore')
         st.dataframe(display_df, use_container_width=True, key="table_best")
     
     elif table_type == "Top Topics":
         if 'topic_label' in df.columns:
             st.subheader("Topic Summary")
-            topic_summary = df.groupby('topic_label').agg({
-                'user_question': 'count',
-                'sentiment_score': 'mean',
-                'happiness_score': 'mean'
-            }).round(2)
-            topic_summary.columns = ['Count', 'Avg Sentiment', 'Avg Happiness']
-            topic_summary = topic_summary.sort_values('Count', ascending=False)
-            st.dataframe(topic_summary, use_container_width=True, key="table_topics")
+            # Use available columns for aggregation
+            agg_dict = {}
+            count_col = 'frage' if 'frage' in df.columns else ('user_question' if 'user_question' in df.columns else None)
+            if count_col:
+                agg_dict[count_col] = 'count'
+            
+            sentiment_col = 'frage_sentiment_score' if 'frage_sentiment_score' in df.columns else ('sentiment_score' if 'sentiment_score' in df.columns else None)
+            if sentiment_col:
+                agg_dict[sentiment_col] = 'mean'
+            
+            happiness_col = 'user_happiness_score' if 'user_happiness_score' in df.columns else ('happiness_score' if 'happiness_score' in df.columns else None)
+            if happiness_col:
+                agg_dict[happiness_col] = 'mean'
+            
+            if agg_dict:
+                topic_summary = df.groupby('topic_label').agg(agg_dict).round(2)
+                topic_summary.columns = ['Count', 'Avg Sentiment', 'Avg Happiness'][:len(topic_summary.columns)]
+                topic_summary = topic_summary.sort_values(topic_summary.columns[0], ascending=False)
+                st.dataframe(topic_summary, use_container_width=True, key="table_topics")
+            else:
+                st.info("No data available for topic summary.")
         else:
             st.info("Topics not computed yet.")
     
